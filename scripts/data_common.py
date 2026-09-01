@@ -1,4 +1,4 @@
-"""Small, dependency-free helpers shared by the data quality scripts."""
+"""Shared deterministic helpers for the annotation and rendering pipelines."""
 
 from __future__ import annotations
 
@@ -94,6 +94,30 @@ def tokens(text: str) -> list[str]:
     return re.findall(r"[a-z0-9]+(?:['’][a-z0-9]+)?", normalized_text(text))
 
 
+SURFACE_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9]+(?:['’][A-Za-z0-9]+)?|[^\w\s]", re.UNICODE)
+
+
+def surface_tokens(text: str) -> list[str]:
+    """Tokenize sentence text using the V0.2 surface convention.
+
+    Words and punctuation are both tokens.  Apostrophes internal to a word
+    remain part of that token; all other punctuation is a separate token.
+    """
+    return SURFACE_TOKEN_PATTERN.findall(unicodedata.normalize("NFKC", text))
+
+
+def normalized_surface_tokens(text: str) -> list[str]:
+    return [token.casefold() for token in surface_tokens(text)]
+
+
+def sentence_word_alignment(record: dict[str, Any]) -> tuple[list[str], list[str]]:
+    sentence = record.get("sentence")
+    words = record.get("words")
+    sentence_tokens = surface_tokens(sentence) if isinstance(sentence, str) else []
+    word_tokens = [word.get("form", "") for word in words] if isinstance(words, list) and all(isinstance(word, dict) for word in words) else []
+    return sentence_tokens, word_tokens
+
+
 def extract_texts(record: dict[str, Any]) -> list[str]:
     """Return all user-visible text, supporting gold and rendered records."""
     values: list[str] = []
@@ -147,10 +171,38 @@ def skeleton(text: str) -> tuple[str, ...]:
 
 
 def construction_signature(record: dict[str, Any]) -> dict[str, Any] | None:
-    """Return an auditable construction signature, deriving a conservative legacy one."""
+    """Return a construction signature independent of record-local IDs.
+
+    Explicit signatures may use local constituent IDs for convenience.  Before
+    contamination comparison those IDs are replaced with stable category and
+    function descriptors, so renaming ``obj`` or ``pp`` cannot evade a match.
+    """
     explicit = record.get("construction_signature")
     if isinstance(explicit, dict):
-        return explicit
+        signature = dict(explicit)
+        objects: dict[str, dict[str, Any]] = {}
+        for collection in (record.get("words", []), record.get("constituents", []), record.get("clauses", [])):
+            if isinstance(collection, list):
+                for item in collection:
+                    if isinstance(item, dict) and isinstance(item.get("id"), str):
+                        objects[item["id"]] = item
+
+        def stable_value(value: Any, field: str) -> Any:
+            if not isinstance(value, str) or value not in objects:
+                return value
+            item = objects[value]
+            if item.get("node_kind") == "word":
+                return f"word:{item.get('lexical_category', 'unknown')}"
+            if item.get("node_kind") == "phrase":
+                category = item.get("phrase_category", item.get("category", "unknown"))
+                return f"phrase:{category}:{item.get('function', 'unspecified')}"
+            return f"clause:{item.get('clause_category', item.get('category', 'unknown'))}:{item.get('function', 'unspecified')}"
+
+        for field in ("argument_pattern", "function_pattern"):
+            values = signature.get(field)
+            if isinstance(values, list):
+                signature[field] = [stable_value(value, field) for value in values]
+        return signature
     messages = record.get("messages")
     if isinstance(messages, list):
         for message in messages:
@@ -174,10 +226,29 @@ def construction_signature(record: dict[str, Any]) -> dict[str, Any] | None:
     arguments = [value for value in selected if isinstance(value, str) and value]
     if not arguments:
         return None
+    objects = {}
+    for collection in (record.get("words", []), record.get("constituents", []), record.get("clauses", [])):
+        if isinstance(collection, list):
+            for item in collection:
+                if isinstance(item, dict) and isinstance(item.get("id"), str):
+                    objects[item["id"]] = item
+    argument_pattern: list[str] = []
+    function_pattern: list[str] = []
+    for argument in arguments:
+        item = objects.get(argument, {})
+        if item.get("node_kind") == "phrase":
+            argument_pattern.append(f"phrase:{item.get('phrase_category', 'unknown')}")
+            function_pattern.append(str(item.get("function", "unspecified")))
+        elif item.get("node_kind") == "clause":
+            argument_pattern.append(f"clause:{item.get('clause_category', 'unknown')}")
+            function_pattern.append(str(item.get("function", "unspecified")))
+        else:
+            argument_pattern.append("unknown")
+            function_pattern.append("unknown")
     return {
         "predicate_lemma": predicate,
         "construction_type": record.get("construction_type") or frame,
-        "argument_pattern": arguments,
-        "function_pattern": arguments,
+        "argument_pattern": argument_pattern,
+        "function_pattern": function_pattern,
         "source": "derived_from_legacy_lexical_valency",
     }

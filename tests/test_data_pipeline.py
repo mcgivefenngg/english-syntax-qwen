@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import copy
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 from scripts.check_contamination import check_contamination, compare
 from scripts.data_common import read_jsonl
-from scripts.render_sft import render_record
+from scripts.render_sft import render_assistant, render_record
 from scripts.validate_dataset import validate_record, validate_files
 
 
@@ -23,6 +25,28 @@ class DataPipelineTests(unittest.TestCase):
         self.assertEqual(len(records), 2)
         for line, record in records:
             self.assertEqual(validate_record(record, f"fixture:{line}"), [])
+
+    def test_json_schema_required_and_additional_properties_are_executed(self) -> None:
+        record = copy.deepcopy(read_jsonl(GOLD)[0][1])
+        record.pop("sentence")
+        errors = validate_record(record, "schema-required")
+        self.assertTrue(any("schema validation failed" in error and "sentence" in error and record["id"] in error for error in errors))
+
+        record = copy.deepcopy(read_jsonl(GOLD)[0][1])
+        record["sentence_classification"] = {"scheme": "demo", "label": "simple", "unexpected": True}
+        errors = validate_record(record, "schema-additional")
+        self.assertTrue(any("additional properties" in error.lower() for error in errors))
+
+    def test_sentence_word_alignment_and_span_boundaries_are_deterministic(self) -> None:
+        record = copy.deepcopy(read_jsonl(GOLD)[0][1])
+        record["sentence"] = "The archivist catalogued the map!"
+        self.assertTrue(any("token alignment mismatch" in error for error in validate_record(record, "alignment")))
+        record = copy.deepcopy(read_jsonl(GOLD)[0][1])
+        record["constituents"][0]["span"] = {"start": 4, "end": 2}
+        self.assertTrue(any("half-open token span" in error for error in validate_record(record, "span")))
+        record = copy.deepcopy(read_jsonl(GOLD)[0][1])
+        record["constituents"][0]["span"] = {"start": 0, "end": 6}
+        self.assertTrue(any("only main_clause spans" in error for error in validate_record(record, "punctuation-span")))
 
     def test_validator_rejects_category_function_confusion(self) -> None:
         record = copy.deepcopy(read_jsonl(GOLD)[0][1])
@@ -68,6 +92,25 @@ class DataPipelineTests(unittest.TestCase):
         record["fusion_relations"] = [{"id": "fusion", "type": "fused_relative", "fused_element": "missing", "whole_constituent": "subj", "relative_clause": "c0", "fused_functions": ["nominal", "relativized"]}]
         self.assertTrue(any("fusion" in error for error in validate_record(record, "bad-fusion")))
 
+    def test_existing_ids_must_have_the_declared_reference_type(self) -> None:
+        record = copy.deepcopy(next(value for _, value in read_jsonl(BENCHMARK) if value["id"] == "new-33-perception-bare"))
+        record["clauses"][1]["subject"] = "w2"
+        self.assertTrue(any("clause.subject" in error for error in validate_record(record, "wrong-subject-type")))
+        record = copy.deepcopy(next(value for _, value in read_jsonl(BENCHMARK) if value["id"] == "new-17-purpose-infinitive"))
+        record["clauses"][1]["predicand"]["target"] = "w4"
+        self.assertTrue(any("overt_constituent predicands must target an NP" in error for error in validate_record(record, "wrong-predicand-type")))
+        record = copy.deepcopy(next(value for _, value in read_jsonl(BENCHMARK) if value["id"] == "legacy-07-put-complement"))
+        record["lexical_valency"][0]["selected_complements"] = ["w0"]
+        self.assertTrue(any("selected complement" in error and "not a word" in error for error in validate_record(record, "wrong-valency-type")))
+        record = copy.deepcopy(next(value for _, value in read_jsonl(BENCHMARK) if value["id"] == "legacy-07-put-complement"))
+        record["semantic_roles"][0]["predicate"] = "pp"
+        self.assertTrue(any("semantic role predicate" in error for error in validate_record(record, "wrong-role-predicate-type")))
+
+    def test_selected_locative_advp_is_not_blanket_rejected(self) -> None:
+        record = copy.deepcopy(read_jsonl(GOLD)[0][1])
+        record["constituents"].append({"id": "loc", "span": {"start": 3, "end": 4}, "function": "selected_locative_complement", "node_kind": "phrase", "phrase_category": "AdvP"})
+        self.assertEqual(validate_record(record, "advp-locative"), [])
+
     def test_alternative_analysis_requires_framework(self) -> None:
         record = copy.deepcopy(read_jsonl(GOLD)[0][1])
         record["alternative_analyses"] = [{"label": "small-clause", "claims": ["the object and predicate form a small clause"], "analysis_type": "small_clause", "construction_type": "object_predication", "status": "established"}]
@@ -81,6 +124,8 @@ class DataPipelineTests(unittest.TestCase):
         self.assertTrue(any("two structural analyses" in error for error in validate_record(record, "bad-ambiguity")))
         record["ambiguity"]["analyses"].append({"id": "np", "structural_claims": ["NP attachment"], "interpretation": "man-associated"})
         self.assertEqual(validate_record(record, "good-ambiguity"), [])
+        record["ambiguity"]["analyses"][0]["attachment"] = "w0"
+        self.assertTrue(any("ambiguity attachment" in error for error in validate_record(record, "bad-ambiguity-attachment")))
 
     def test_semantic_role_does_not_override_function(self) -> None:
         record = copy.deepcopy(read_jsonl(GOLD)[0][1])
@@ -101,6 +146,17 @@ class DataPipelineTests(unittest.TestCase):
         self.assertEqual([message["role"] for message in rendered["messages"]], ["system", "user", "assistant"])
         self.assertIn("Proposed analysis", rendered["messages"][1]["content"])
         self.assertIsInstance(json.loads(rendered["messages"][2]["content"]), dict)
+
+    def test_renderer_keeps_declared_structural_supervision(self) -> None:
+        record = next(value for _, value in read_jsonl(BENCHMARK) if value["id"] == "legacy-07-put-complement")
+        payload = json.loads(render_assistant(record))
+        for field in ("words", "dependencies", "lexical_valency", "semantic_roles", "sentence_type", "framework", "review_metadata"):
+            self.assertIn(field, payload)
+
+    def test_malformed_rendered_assistant_json_fails(self) -> None:
+        rendered = render_record(read_jsonl(GOLD)[0][1])
+        rendered["messages"][2]["content"] = "{not-json"
+        self.assertTrue(any("assistant content must be valid JSON" in error for error in validate_record(rendered, "rendered-malformed")))
 
     def test_contamination_exact_and_near_duplicate(self) -> None:
         self.assertIn("exact sentence match", compare("She put the book on the table.", "She put the book on the table."))
@@ -134,6 +190,17 @@ class DataPipelineTests(unittest.TestCase):
             self.assertFalse(any("construction signature" in finding for finding in check_contamination(BENCHMARK, [path])))
         self.assertNotIn("simple lexical substitution/paraphrase skeleton", compare("She put the book on the table.", "She placed the luggage on the table."))
 
+    def test_construction_signature_does_not_depend_on_local_ids(self) -> None:
+        base = copy.deepcopy(next(value for _, value in read_jsonl(BENCHMARK) if value["id"] == "legacy-07-put-complement"))
+        base["construction_signature"]["argument_pattern"] = ["obj", "pp"]
+        base["construction_signature"]["function_pattern"] = ["object", "selected_locative_complement"]
+        renamed = copy.deepcopy(base)
+        renamed["constituents"][0]["id"] = "location"
+        renamed["lexical_valency"][0]["selected_complements"] = ["location"]
+        renamed["construction_signature"]["argument_pattern"] = ["obj", "location"]
+        from scripts.validate_dataset import _signature_key
+        self.assertEqual(_signature_key(base), _signature_key(renamed))
+
     def test_benchmark_isolated_from_gold_splits(self) -> None:
         benchmark_rows = read_jsonl(BENCHMARK)
         self.assertEqual(len(benchmark_rows), 50)
@@ -144,6 +211,36 @@ class DataPipelineTests(unittest.TestCase):
         self.assertTrue(benchmark_ids.isdisjoint(gold_ids))
         self.assertEqual(validate_files([GOLD], BENCHMARK), [])
         self.assertTrue(validate_files([ROOT / "data" / "does-not-exist.jsonl"], BENCHMARK))
+
+    def test_benchmark_records_use_full_validation_and_review_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "benchmark.jsonl"
+            rows = [value for _, value in read_jsonl(BENCHMARK)]
+            rows[0]["words"][0]["form"] = "BROKEN"
+            path.write_text("\n".join(json.dumps(value) for value in rows) + "\n", encoding="utf-8")
+            errors = validate_files([GOLD], path)
+            self.assertTrue(any("token alignment mismatch" in error for error in errors))
+            rows = [value for _, value in read_jsonl(BENCHMARK)]
+            rows[0]["review_metadata"]["review_status"] = "canonical_gold"
+            path.write_text("\n".join(json.dumps(value) for value in rows) + "\n", encoding="utf-8")
+            errors = validate_files([GOLD], path)
+            self.assertTrue(any("cannot claim canonical_gold" in error for error in errors))
+
+    def test_structural_failure_returns_nonzero_cli_status(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "broken.jsonl"
+            record = copy.deepcopy(read_jsonl(GOLD)[0][1])
+            record["words"][0]["form"] = "BROKEN"
+            path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, "scripts/validate_dataset.py", str(path), "--benchmark", str(BENCHMARK)],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("token alignment mismatch", result.stderr)
 
     def test_rendered_split_files_are_disjoint(self) -> None:
         train_ids = {record["id"] for _, record in read_jsonl(ROOT / "data" / "splits" / "train_fixture.jsonl")}

@@ -57,7 +57,8 @@
     "explanation": {"type": "string", "minLength": 1},
     "contrast_group": {"type": ["string", "null"]},
     "split": {"enum": ["train", "validation", "benchmark"]},
-    "error_diagnosis": {"$ref": "#/$defs/errorDiagnosis"}
+    "error_diagnosis": {"$ref": "#/$defs/errorDiagnosis"},
+    "review_metadata": {"$ref": "#/$defs/reviewMetadata"}
   },
   "$defs": {
     "capability": {"enum": [
@@ -170,10 +171,10 @@
     },
     "ambiguityAnalysis": {
       "type": "object", "additionalProperties": false, "required": ["id", "structural_claims", "interpretation"],
-      "properties": {"id": {"type": "string"}, "structural_claims": {"type": "array", "items": {"type": "string"}}, "interpretation": {"type": "string"}, "framework": {"type": "string"}, "preference_basis": {"type": "string"}}
+      "properties": {"id": {"type": "string"}, "structural_claims": {"type": "array", "items": {"type": "string"}}, "interpretation": {"type": "string"}, "framework": {"type": "string"}, "preference_basis": {"type": "string"}, "attachment": {"type": "string"}, "target": {"type": "string"}, "constituent": {"type": "string"}, "clause": {"type": "string"}}
     },
     "constructionSignature": {
-      "type": "object", "additionalProperties": true, "required": ["predicate_lemma", "construction_type", "argument_pattern", "function_pattern"],
+      "type": "object", "additionalProperties": true, "description": "Patterns use stable category/function descriptors, never record-local IDs.", "required": ["predicate_lemma", "construction_type", "argument_pattern", "function_pattern"],
       "properties": {"predicate_lemma": {"type": "string", "minLength": 1}, "construction_type": {"type": "string", "minLength": 1}, "argument_pattern": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}, "function_pattern": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}, "source": {"type": "string"}}
     },
     "rejected": {
@@ -187,6 +188,17 @@
     "diagnosis": {
       "type": "object", "additionalProperties": true, "required": ["claim", "verdict", "error_level", "correct_analysis", "why"],
       "properties": {"claim": {"type": "string", "minLength": 1}, "verdict": {"enum": ["error", "acceptable_alternative", "correct"]}, "error_level": {"enum": ["lexical_category", "phrase_category", "syntactic_function", "clause_structure", "framework", "semantic_role", "span", "none"]}, "correct_analysis": {"type": "string", "minLength": 1}, "why": {"type": "string", "minLength": 1}}
+    },
+    "reviewMetadata": {
+      "type": "object", "additionalProperties": false,
+      "required": ["review_status", "reviewer_type", "migration_version"],
+      "properties": {
+        "review_status": {"enum": ["schema_migrated", "structurally_validated", "review_required", "linguistically_reviewed", "canonical_gold"]},
+        "reviewer_type": {"enum": ["automated_structural", "independent_linguistic", "human_annotation", "mixed"]},
+        "review_date": {"type": "string", "minLength": 1},
+        "provenance": {"type": "string", "minLength": 1},
+        "migration_version": {"type": "string", "minLength": 1}
+      }
     }
   }
 }

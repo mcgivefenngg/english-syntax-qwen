@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://english-syntax-tutor.local/schema/rendered-sft-target-0.2.1.json",
+  "title": "English Syntax Tutor rendered SFT target",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "messages"],
+  "properties": {
+    "id": {"type": "string", "minLength": 1},
+    "messages": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "prefixItems": [
+        {"$ref": "#/$defs/systemMessage"},
+        {"$ref": "#/$defs/userMessage"},
+        {"$ref": "#/$defs/assistantMessage"}
+      ],
+      "items": false
+    }
+  },
+  "$defs": {
+    "systemMessage": {
+      "type": "object", "additionalProperties": false, "required": ["role", "content"],
+      "properties": {"role": {"const": "system"}, "content": {"type": "string", "minLength": 1}}
+    },
+    "userMessage": {
+      "type": "object", "additionalProperties": false, "required": ["role", "content"],
+      "properties": {"role": {"const": "user"}, "content": {"type": "string", "minLength": 1}}
+    },
+    "assistantMessage": {
+      "type": "object", "additionalProperties": false, "required": ["role", "content"],
+      "properties": {"role": {"const": "assistant"}, "content": {"type": "string", "minLength": 2}}
+    }
+  }
+}

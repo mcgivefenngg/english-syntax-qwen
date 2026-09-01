@@ -24,17 +24,7 @@ def render_user(record: dict[str, Any]) -> str:
 
 
 def render_assistant(record: dict[str, Any]) -> str:
-    canonical = record.get("canonical_analysis", record.get("preferred_analysis"))
-    payload: dict[str, Any] = {
-        "canonical_analysis": canonical,
-        "clauses": record.get("clauses", []),
-        "constituents": record.get("constituents", []),
-        "explanation": record["explanation"],
-    }
-    for key in ("framework_alternatives", "alternative_analyses", "pedagogical_aliases", "fusion_relations", "ambiguity", "construction_signature", "rejected_analyses", "error_diagnosis"):
-        if key in record:
-            payload[key] = record[key]
-    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    return json.dumps(record, ensure_ascii=False, sort_keys=True)
 
 
 def render_record(record: dict[str, Any], system_prompt: str = DEFAULT_SYSTEM) -> dict[str, Any]:

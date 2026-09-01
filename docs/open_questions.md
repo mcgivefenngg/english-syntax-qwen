@@ -22,4 +22,6 @@ The V0.1 questions listed below were formally resolved for V0.2. The authoritati
 
 ## New questions
 
-No new theory question was discovered while implementing V0.2. The policy intentionally leaves deep disputes about an individual benchmark sentence to the independent linguistic review planned for the next phase.
+13. **Clause ontology dimensions (HIGH PRIORITY).** `clause_category` currently mixes clause status (main), finiteness (finite/non-finite), construction type (relative/interrogative/gerund-participial/infinitival), and discourse function (supplementary). The current release does not infer one dimension from another and does not add new records that depend on the mixed enum. Migration inventory: all records contain `clauses[].clause_category`; records using `relative_clause`, `interrogative_clause`, `gerund_participial_clause`, or `infinitival_clause` will need a schema migration when dimensions are separated. This release preserves their existing analyses for later human ontology review.
+
+14. **Individual construction adjudication.** Perception constructions, control/raising/ECM, small clauses, relative `that`, fused relatives, semantic-role inventory, and ambiguity scoring remain linguistic questions. Structural validation deliberately does not choose among competing theories; records whose boundaries or reference types cannot be fixed mechanically remain candidates for independent review.
