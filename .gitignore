@@ -27,6 +27,7 @@ data/reviewed/*
 !data/reviewed/.gitkeep
 data/splits/*
 !data/splits/.gitkeep
+!data/splits/*_fixture.jsonl
 
 eval/benchmark/results/*
 !eval/benchmark/results/.gitkeep

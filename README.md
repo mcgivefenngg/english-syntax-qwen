@@ -221,6 +221,43 @@ scripts/convert_to_gguf.sh \
 
 Qwen3.5 is a vision-language model. This project trains text-only conversations and disables vision-layer LoRA by default. Text-only LM Studio/PocketPal testing should be performed first. Image support may require an additional `mmproj` conversion artifact depending on the exact `llama.cpp` support in the pinned commit.
 
+## English Syntax Tutor V0.2 data architecture
+
+The data layer is intentionally separate from model and CUDA setup. Human-reviewed canonical annotations live in JSONL under `data/gold/`; the normative field contract is [`schemas/gold_annotation.schema.json`](schemas/gold_annotation.schema.json), with the annotation decisions explained in [`docs/theory_policy_v0.2.md`](docs/theory_policy_v0.2.md) and [`docs/annotation_guidelines.md`](docs/annotation_guidelines.md). Canonical records preserve lexical category, phrase category, syntactic function, semantic role, clause finiteness, heads, valency, framework, canonical analysis, established alternatives, rejected analyses, contrasts, and error diagnoses as separate fields.
+
+The held-out file [`eval/benchmark_v1.jsonl`](eval/benchmark_v1.jsonl) contains 50 examples: the 10 legacy baseline sentences plus 40 newly authored surface forms. Every benchmark record has `split: "benchmark"` and `source_type: "legacy_baseline"` only for the legacy ten. Benchmark records are never copied to train, validation, reviewed, or synthetic seed data. The small rendered fixtures in `data/splits/*_fixture.jsonl` are deliberately different sentences and are not a training corpus.
+
+Gold and SFT representations are different layers:
+
+```text
+data/gold/*.jsonl --(scripts/render_sft.py)--> data/splits/train.jsonl
+                                          --> data/splits/validation.jsonl
+```
+
+Render a selected split with a replaceable system prompt:
+
+```bash
+.venv/bin/python scripts/render_sft.py data/gold/fixtures.jsonl \
+  --split train --output data/splits/train.jsonl
+.venv/bin/python scripts/render_sft.py data/gold/fixtures.jsonl \
+  --split validation --output data/splits/validation.jsonl
+```
+
+The renderer emits standard `messages` with `system`, `user`, and `assistant` string content. The assistant content is a compact JSON rendering of the gold analysis, not a bulk collection of hand-written natural-language answers. Prompt and response styles can therefore change without re-annotation.
+
+Run checks before publishing a split:
+
+```bash
+.venv/bin/python scripts/validate_dataset.py data/gold --benchmark eval/benchmark_v1.jsonl
+.venv/bin/python scripts/check_contamination.py data/splits data/generated \
+  --benchmark eval/benchmark_v1.jsonl
+.venv/bin/python -m unittest discover -s tests -v
+```
+
+`validate_dataset.py` checks required fields, controlled vocabularies, unique IDs/sentences, token spans, dependency and relation references, finiteness/category consistency, category/function conflations, error-diagnosis structure, construction signatures, and benchmark split leakage. `check_contamination.py` adds exact, case/punctuation-normalized, embedded, lexical-overlap, sequence, token-edit-distance, simple lexical-substitution skeleton, and construction-level frame checks; any finding exits non-zero. See [`docs/capability_taxonomy.md`](docs/capability_taxonomy.md) for the finite tag inventory, [`docs/theory_policy_v0.2.md`](docs/theory_policy_v0.2.md) for authoritative decisions, and [`docs/open_questions.md`](docs/open_questions.md) for questions reserved for future human review.
+
+To add an example: create a canonical record in `data/gold/` (or an approved reviewed file), assign its real split, run both checks, review framework alternatives and spans, then render only the desired split. Do not put benchmark records in any generated seed or training path.
+
 ## Repository layout
 
 ```text
@@ -233,10 +270,15 @@ english-syntax-qwen/
 ├── data/
 │   ├── raw/
 │   ├── generated/
+│   ├── gold/
 │   ├── reviewed/
 │   └── splits/
+├── eval/benchmark_v1.jsonl
 ├── eval/benchmark/
+├── schemas/
+├── docs/
 ├── scripts/
+├── tests/
 ├── notebooks/
 ├── outputs/
 └── experiments/

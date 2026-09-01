@@ -1,0 +1,183 @@
+"""Small, dependency-free helpers shared by the data quality scripts."""
+
+from __future__ import annotations
+
+import json
+import re
+import string
+import unicodedata
+from pathlib import Path
+from typing import Any, Iterable
+
+
+CAPABILITY_TAGS = {
+    "basic_constituency", "clause_structure", "pos", "phrase_category", "syntactic_function",
+    "complement_adjunct", "lexical_valency", "relative_clause", "fused_relative",
+    "interrogative_clause", "nonfinite_clause", "gerund_participial", "infinitival",
+    "control", "raising", "ecm", "perception_construction", "secondary_predication",
+    "predicative_complement", "pp_attachment", "ambiguity", "coordination",
+    "semantic_roles", "framework_distinction", "error_diagnosis",
+}
+FRAMEWORKS = {"cgel_inspired", "CGEL", "traditional_pedagogical", "modern_descriptive", "mixed"}
+CANONICAL_FRAMEWORK = "cgel_inspired"
+SPLITS = {"train", "validation", "benchmark"}
+SCHEMA_VERSIONS = {"0.1", "0.2"}
+LEXICAL_CATEGORIES = {
+    "noun", "verb", "adjective", "adverb", "preposition", "determiner", "pronoun",
+    "coordinator", "subordinator", "auxiliary", "modal", "particle", "numeral",
+    "interjection", "punctuation",
+}
+PHRASE_CATEGORIES = {"NP", "VP", "PP", "AdjP", "AdvP", "DetP", "CoordP", "ComparativeP", "marker", "word"}
+FUNCTIONS = {
+    "subject", "object", "indirect_object", "predicative_complement", "subject_predicative_complement",
+    "object_predicative_complement", "selected_locative_complement", "selected_complement",
+    "complement", "adjunct", "adverbial", "supplementary_adverbial", "relative_modifier",
+    "determinative", "marker", "coordinate", "extraposed_subject", "predicand", "head",
+}
+DIFFICULTIES = {"foundation", "intermediate", "advanced", "expert"}
+SENTENCE_TYPES = {"declarative", "interrogative", "exclamative", "imperative", "fragment"}
+SENTENCE_CLASSIFICATION_LABELS = {"simple", "compound", "complex"}
+SOURCE_TYPES = {"authored", "legacy_baseline", "minimal_pair", "contrast_set", "error_diagnosis", "adapted_public_domain"}
+SEMANTIC_ROLES = {
+    "Agent", "Patient", "Theme", "Experiencer", "Stimulus", "Recipient", "Beneficiary",
+    "Location", "Goal", "Source", "Instrument", "Cause", "Possessor", "Attribute",
+    "Result", "State", "Support", "Time", "Purpose", "Proposition", "Addressee",
+    "Classification", "Temporal/Aspectual", "OTHER", "UNSPECIFIED",
+}
+CLAUSE_CATEGORIES = {
+    "main_clause", "finite_clause", "nonfinite_clause", "relative_clause", "interrogative_clause",
+    "gerund_participial_clause", "infinitival_clause", "comparative_clause", "supplementary_clause",
+}
+NODE_KINDS = {"word", "phrase", "clause"}
+AMBIGUITY_STATUSES = {
+    "unambiguous", "genuinely_ambiguous", "multiple_established_analyses_with_preferred_reading",
+}
+ALTERNATIVE_CONSTRUCTION_WHITELIST = {
+    "small_clause": {"object_predication", "resultative", "caused_state"},
+}
+
+
+def read_jsonl(path: Path) -> list[tuple[int, dict[str, Any]]]:
+    rows: list[tuple[int, dict[str, Any]]] = []
+    with path.open(encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, 1):
+            if not line.strip():
+                continue
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError as error:
+                raise ValueError(f"{path}:{line_number}: invalid JSON: {error.msg}") from error
+            if not isinstance(value, dict):
+                raise ValueError(f"{path}:{line_number}: JSON value must be an object")
+            rows.append((line_number, value))
+    return rows
+
+
+def iter_jsonl_paths(paths: Iterable[Path]) -> list[Path]:
+    expanded: list[Path] = []
+    for path in paths:
+        if path.is_dir():
+            expanded.extend(sorted(path.rglob("*.jsonl")))
+        elif path.exists():
+            expanded.append(path)
+    return expanded
+
+
+def normalized_text(text: str) -> str:
+    text = unicodedata.normalize("NFKC", text).casefold()
+    text = text.translate(str.maketrans({char: " " for char in string.punctuation}))
+    text = "".join(" " if unicodedata.category(char).startswith("P") else char for char in text)
+    return " ".join(text.split())
+
+
+def tokens(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+(?:['’][a-z0-9]+)?", normalized_text(text))
+
+
+def extract_texts(record: dict[str, Any]) -> list[str]:
+    """Return all user-visible text, supporting gold and rendered records."""
+    values: list[str] = []
+    if isinstance(record.get("sentence"), str):
+        values.append(record["sentence"])
+    messages = record.get("messages")
+    if isinstance(messages, list):
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            content = message.get("content")
+            if isinstance(content, str):
+                values.append(content)
+            elif isinstance(content, list):
+                values.extend(item.get("text", "") for item in content if isinstance(item, dict) and isinstance(item.get("text"), str))
+    return values
+
+
+def sentence_from_record(record: dict[str, Any]) -> str | None:
+    if isinstance(record.get("sentence"), str):
+        return record["sentence"]
+    for text in extract_texts(record):
+        match = re.search(r"(?:sentence|example)\s*:\s*(.+?)(?:\n|$)", text, re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+    return None
+
+
+def levenshtein(left: list[str], right: list[str]) -> int:
+    if len(left) < len(right):
+        left, right = right, left
+    previous = list(range(len(right) + 1))
+    for left_index, left_token in enumerate(left, 1):
+        current = [left_index]
+        for right_index, right_token in enumerate(right, 1):
+            current.append(min(current[-1] + 1, previous[right_index] + 1, previous[right_index - 1] + (left_token != right_token)))
+        previous = current
+    return previous[-1]
+
+
+def lexical_overlap(left: str, right: str) -> float:
+    left_set, right_set = set(tokens(left)), set(tokens(right))
+    if not left_set or not right_set:
+        return 0.0
+    return len(left_set & right_set) / len(left_set | right_set)
+
+
+def skeleton(text: str) -> tuple[str, ...]:
+    stopwords = {"a", "an", "the", "to", "of", "on", "in", "at", "by", "for", "with", "from", "that", "who", "which", "what", "he", "she", "him", "her", "it", "i", "we", "they", "was", "were", "is", "are", "be", "been", "being", "did", "do", "does", "and", "or", "but", "if", "as", "than"}
+    return tuple(token if token in stopwords else "<LEX>" for token in tokens(text))
+
+
+def construction_signature(record: dict[str, Any]) -> dict[str, Any] | None:
+    """Return an auditable construction signature, deriving a conservative legacy one."""
+    explicit = record.get("construction_signature")
+    if isinstance(explicit, dict):
+        return explicit
+    messages = record.get("messages")
+    if isinstance(messages, list):
+        for message in messages:
+            if not isinstance(message, dict) or message.get("role") != "assistant" or not isinstance(message.get("content"), str):
+                continue
+            try:
+                rendered = json.loads(message["content"])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(rendered, dict) and isinstance(rendered.get("construction_signature"), dict):
+                return rendered["construction_signature"]
+    valencies = record.get("lexical_valency")
+    if not isinstance(valencies, list) or len(valencies) != 1 or not isinstance(valencies[0], dict):
+        return None
+    valency = valencies[0]
+    predicate = valency.get("predicate")
+    frame = valency.get("frame")
+    selected = valency.get("selected_complements")
+    if not all(isinstance(value, str) and value for value in (predicate, frame)) or not isinstance(selected, list):
+        return None
+    arguments = [value for value in selected if isinstance(value, str) and value]
+    if not arguments:
+        return None
+    return {
+        "predicate_lemma": predicate,
+        "construction_type": record.get("construction_type") or frame,
+        "argument_pattern": arguments,
+        "function_pattern": arguments,
+        "source": "derived_from_legacy_lexical_valency",
+    }
