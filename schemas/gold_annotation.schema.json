@@ -111,13 +111,27 @@
       }
     },
     "coverageScope": {
-      "type": "object", "additionalProperties": false, "required": ["kind"],
-      "properties": {
-        "kind": {"enum": ["record", "node", "region"]},
-        "node": {"type": "string", "minLength": 1},
-        "start": {"type": "integer", "minimum": 0},
-        "end": {"type": "integer", "minimum": 1}
-      }
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false, "required": ["kind"],
+          "properties": {"kind": {"const": "record"}}
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["kind", "node"],
+          "properties": {
+            "kind": {"const": "node"},
+            "node": {"type": "string", "minLength": 1}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["kind", "start", "end"],
+          "properties": {
+            "kind": {"const": "region"},
+            "start": {"type": "integer", "minimum": 0},
+            "end": {"type": "integer", "minimum": 1}
+          }
+        }
+      ]
     },
     "span": {
       "type": "object", "additionalProperties": false, "required": ["start", "end"],

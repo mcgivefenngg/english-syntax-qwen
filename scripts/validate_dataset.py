@@ -38,6 +38,17 @@ except ImportError:
         normalized_surface_tokens, read_jsonl, sentence_from_record, sentence_word_alignment,
     )
 
+try:
+    from coverage_resolution import (
+        CoverageResolutionError, CoverageState, coverage_declaration_issues,
+        coverage_scope_key, resolve_coverage,
+    )
+except ImportError:
+    from scripts.coverage_resolution import (
+        CoverageResolutionError, CoverageState, coverage_declaration_issues,
+        coverage_scope_key, resolve_coverage,
+    )
+
 
 REQUIRED = {
     "schema_version", "id", "sentence", "capability_tags", "difficulty", "source_type",
@@ -535,6 +546,8 @@ def _validate_coverage(record: dict[str, Any], location: str, errors: list[str])
     overlap = legacy_annotated & legacy_omitted
     if overlap:
         _error(errors, f"{location}.annotation_scope", f"legacy coverage summaries conflict for dimensions: {sorted(overlap)}")
+    for issue in coverage_declaration_issues(record):
+        _error(errors, f"{location}.annotation_scope.dimensions[{issue.index}]", issue.message)
     entries: dict[tuple[str, tuple[Any, ...]], dict[str, Any]] = {}
     for index, entry in enumerate(dimensions):
         entry_location = f"{location}.annotation_scope.dimensions[{index}]"
@@ -546,12 +559,6 @@ def _validate_coverage(record: dict[str, Any], location: str, errors: list[str])
             _error(errors, entry_location, "unknown coverage dimension")
             continue
         coverage_scope = entry.get("scope")
-        if not isinstance(coverage_scope, dict) or coverage_scope.get("kind") not in {"record", "node", "region"}:
-            _error(errors, entry_location, "coverage scope must identify a record, node, or region")
-        elif coverage_scope.get("kind") == "node" and not isinstance(coverage_scope.get("node"), str):
-            _error(errors, entry_location, "node coverage scope requires node")
-        elif coverage_scope.get("kind") == "region" and (not isinstance(coverage_scope.get("start"), int) or not isinstance(coverage_scope.get("end"), int) or coverage_scope["end"] <= coverage_scope["start"]):
-            _error(errors, entry_location, "region coverage scope requires a non-empty start/end")
         if entry.get("completeness") not in {"complete", "partial", "unannotated", "omitted", "out_of_scope"}:
             _error(errors, entry_location, "coverage completeness must be complete, partial, unannotated, omitted, or out_of_scope")
         if entry.get("omission") not in {"none", "intentional", "not_applicable"}:
@@ -564,13 +571,7 @@ def _validate_coverage(record: dict[str, Any], location: str, errors: list[str])
             _error(errors, entry_location, "complete coverage cannot be marked intentionally omitted or not applicable")
         if entry.get("omission") in {"intentional", "not_applicable"} and entry.get("evidence") not in {None, "unannotated"}:
             _error(errors, entry_location, "omitted coverage must use evidence='unannotated' when evidence is declared")
-        scope_key = (dimension, _coverage_scope_key(coverage_scope))
-        if scope_key in entries:
-            previous = entries[scope_key]
-            if previous.get("completeness") != entry.get("completeness") or previous.get("omission") != entry.get("omission") or previous.get("evidence") != entry.get("evidence"):
-                _error(errors, entry_location, "same dimension + scope cannot have contradictory coverage states")
-            else:
-                _error(errors, entry_location, "duplicate dimension + scope coverage declaration")
+        scope_key = (dimension, coverage_scope_key(coverage_scope))
         entries[scope_key] = entry
         if dimension == "dependencies" and isinstance(coverage_scope, dict) and coverage_scope.get("kind") == "record":
             dependencies = record.get("dependencies")
@@ -617,69 +618,17 @@ def _validate_coverage(record: dict[str, Any], location: str, errors: list[str])
             _error(errors, f"{location}.annotation_scope", "complete_constituency requires actual constituent structure")
 
 
-def _coverage_scope_key(scope: dict[str, Any] | None) -> tuple[Any, ...]:
-    if not isinstance(scope, dict):
-        return ("invalid",)
-    kind = scope.get("kind")
-    if kind == "record":
-        return ("record",)
-    if kind == "node":
-        return ("node", scope.get("node"))
-    if kind == "region":
-        return ("region", scope.get("start"), scope.get("end"))
-    return (kind,)
-
-
 def coverage_allows_score(record: dict[str, Any], dimension: str, target: str | None = None) -> bool:
     """Return whether a requested dimension/target is declared scorable."""
-    scope = record.get("annotation_scope", {})
-    objects: dict[str, dict[str, Any]] = {}
-    for collection in ("words", "constituents", "clauses"):
-        values = record.get(collection, [])
-        if isinstance(values, list):
-            for item in values:
-                if isinstance(item, dict) and isinstance(item.get("id"), str):
-                    objects[item["id"]] = item
-    applicable: list[tuple[int, dict[str, Any]]] = []
-    for entry in scope.get("dimensions", []) if isinstance(scope, dict) else []:
-        if not isinstance(entry, dict) or entry.get("dimension") != dimension:
-            continue
-        coverage_scope = entry.get("scope", {})
-        if not isinstance(coverage_scope, dict):
-            continue
-        kind = coverage_scope.get("kind")
-        if kind == "record":
-            if target is None:
-                applicable.append((0, entry))
-            elif target is not None:
-                applicable.append((0, entry))
-        elif kind == "node" and target is not None and coverage_scope.get("node") == target:
-            applicable.append((2, entry))
-        elif kind == "region" and target is None:
-            applicable.append((1, entry))
-        elif kind == "region" and target is not None:
-            target_span = objects.get(target, {}).get("span")
-            if (
-                isinstance(target_span, dict)
-                and isinstance(coverage_scope.get("start"), int)
-                and isinstance(coverage_scope.get("end"), int)
-                and target_span.get("start", -1) >= coverage_scope["start"]
-                and target_span.get("end", -1) <= coverage_scope["end"]
-            ):
-                applicable.append((1, entry))
-    if not applicable:
+    try:
+        state = resolve_coverage(record, dimension, target)
+    except CoverageResolutionError:
         return False
-    _, selected = max(applicable, key=lambda item: item[0])
-    if selected.get("omission") != "none":
-        return False
-    completeness = selected.get("completeness")
-    if completeness in {"unannotated", "omitted", "out_of_scope"}:
-        return False
-    if target is None:
-        return completeness == "complete"
-    if completeness == "partial" and isinstance(selected.get("scope"), dict) and selected["scope"].get("kind") == "record":
-        return False
-    return completeness in {"complete", "partial"}
+    return state in {
+        CoverageState.COMPLETE,
+        CoverageState.PARTIAL_COVERED,
+        CoverageState.CONFIRMED_EMPTY,
+    }
 
 
 def validate_record(record: Any, location: str, schema_path: Path | None = None) -> list[str]:
@@ -864,15 +813,6 @@ def validate_record(record: Any, location: str, schema_path: Path | None = None)
     for duplicate_id in sorted(word_ids & ids):
         _error(errors, location, f"word and constituent/clause IDs must be unique; repeated {duplicate_id!r}")
     all_ids = ids | word_ids
-    if _is_v3(record) and isinstance(record.get("annotation_scope"), dict):
-        for index, entry in enumerate(record["annotation_scope"].get("dimensions", [])):
-            if not isinstance(entry, dict) or not isinstance(entry.get("scope"), dict):
-                continue
-            coverage_scope = entry["scope"]
-            if coverage_scope.get("kind") == "node" and coverage_scope.get("node") not in all_ids:
-                _error(errors, f"{location}.annotation_scope.dimensions[{index}]", "node coverage scope must reference a known node")
-            if coverage_scope.get("kind") == "region" and isinstance(coverage_scope.get("end"), int) and coverage_scope["end"] > max_token:
-                _error(errors, f"{location}.annotation_scope.dimensions[{index}]", "region coverage scope must fit within the token sequence")
     objects: dict[str, dict[str, Any]] = {}
     for word in words:
         if isinstance(word, dict) and isinstance(word.get("id"), str):
@@ -1168,7 +1108,6 @@ def validate_record(record: Any, location: str, schema_path: Path | None = None)
                 _error(errors, location, f"clause realization {key!r} has conflicting canonical wrapper functions; link an explicit ambiguity or established alternative")
             else:
                 _error(errors, location, f"clause realization {key!r} has duplicate canonical wrappers")
-        scope_entries = record.get("annotation_scope", {}).get("dimensions", []) if isinstance(record.get("annotation_scope"), dict) else []
         wrapped_clause_ids = {
             item.get("clause_ref") for item in record["constituents"]
             if isinstance(item, dict) and item.get("node_kind") == "clause" and isinstance(item.get("clause_ref"), str)
@@ -1176,28 +1115,12 @@ def validate_record(record: Any, location: str, schema_path: Path | None = None)
         for clause in record.get("clauses", []):
             if not isinstance(clause, dict) or "root" in (clause.get("integration") or []) or clause.get("id") in wrapped_clause_ids:
                 continue
-            clause_span = clause.get("span") if isinstance(clause.get("span"), dict) else {}
-            function_coverage_applies = False
-            for entry in scope_entries:
-                if not isinstance(entry, dict) or entry.get("dimension") != "syntactic_function" or entry.get("omission") != "none" or entry.get("completeness") != "complete":
-                    continue
-                coverage_scope = entry.get("scope") if isinstance(entry.get("scope"), dict) else {}
-                if coverage_scope.get("kind") == "record":
-                    function_coverage_applies = True
-                elif coverage_scope.get("kind") == "node" and coverage_scope.get("node") == clause.get("id"):
-                    function_coverage_applies = True
-                elif (
-                    coverage_scope.get("kind") == "region"
-                    and isinstance(clause_span.get("start"), int)
-                    and isinstance(clause_span.get("end"), int)
-                    and isinstance(coverage_scope.get("start"), int)
-                    and isinstance(coverage_scope.get("end"), int)
-                    and coverage_scope["start"] <= clause_span["start"]
-                    and clause_span["end"] <= coverage_scope["end"]
-                ):
-                    function_coverage_applies = True
-                if function_coverage_applies:
-                    break
+            try:
+                function_coverage_applies = resolve_coverage(
+                    record, "syntactic_function", clause.get("id")
+                ) is CoverageState.COMPLETE
+            except CoverageResolutionError:
+                function_coverage_applies = False
             if function_coverage_applies:
                 _error(errors, location, f"complete syntactic-function coverage requires an external realization wrapper for clause {clause.get('id')!r}")
 
