@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://english-syntax-tutor.local/schema/gold-annotation-0.3-legacy.json",
+  "title": "English Syntax Tutor V0.3 legacy gold annotation (frozen)",
+  "description": "Historical V0.3 artifact. It is not accepted by the V0.4 canonical validator.",
+  "type": "object",
+  "required": ["schema_version"],
+  "properties": {"schema_version": {"const": "0.3"}},
+  "additionalProperties": true
+}

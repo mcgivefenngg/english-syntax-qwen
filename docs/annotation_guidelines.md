@@ -1,18 +1,22 @@
-# English Syntax Tutor V0.2 annotation guidelines
+# English Syntax Tutor V0.4 annotation guidelines
 
-The authoritative theory decisions are in [`theory_policy_v0.2.md`](theory_policy_v0.2.md). This document retains the practical V0.1 examples while describing the V0.2 migration fields.
+The authoritative V0.4 ontology is in [`ontology_v0.4.md`](ontology_v0.4.md). Earlier theory decisions remain in [`theory_policy_v0.2.md`](theory_policy_v0.2.md) only where they are not superseded.
+
+V0.4 is a breaking foundational wire-contract correction, not a new linguistic-gold
+release. Do not mark unresolved lexical items or benchmark records
+`canonical_gold`.
 
 This document defines the machine-readable canonical layer and its review-status boundary. Annotators record an analysis; they do not write a conversational answer. Structural validation does not confer independent linguistic review or `canonical_gold` status. The renderer can later choose a prompt and response style without changing the canonical data.
 
 ## Annotation unit
 
-Each JSONL object is one sentence-level example. Token spans use zero-based, half-open indices (`start` inclusive, `end` exclusive) into `words`. Every span must be contiguous and within the token list. Words and punctuation are both tokens: punctuation is emitted as its own `words` item (for example `.` or `,`) and punctuation spacing is normalized only for sentence/token alignment. Main-clause spans may cover sentence-final punctuation; phrase and embedded-clause boundaries should not be extended merely to absorb punctuation. The validator compares the sentence surface-token sequence with `words[].form` exactly (case-insensitively), so a missing or extra punctuation token is a structural error. A `clause` is a clause because of its clause structure, not because it contains a finite verb: non-finite clauses are valid clauses.
+Each JSONL object is one sentence-level example. Token spans use zero-based, half-open indices (`start` inclusive, `end` exclusive) into `words`. Every span must be contiguous and within the token list. Words and punctuation are both tokens: punctuation is emitted as its own `words` item (for example `.` or `,`) and punctuation spacing is normalized only for sentence/token alignment. Sentence-final punctuation is excluded from every structural span, including the root clause; internal punctuation may occur inside a larger root span. The validator compares the sentence surface-token sequence with `words[].form` exactly (case-insensitively), so a missing or extra punctuation token is a structural error. A `clause` is a clause because of its clause structure, not because it contains a finite verb: non-finite clauses are valid clauses.
 
 ### Why this shape
 
 The schema uses stable IDs and spans so nested constituency and cross-clause relations can be checked without reparsing text. Orthogonal fields prevent a semantic observation from overwriting a category or function label. Preferred, alternative, and rejected analyses are separate so a framework comparison is explicit and auditable. Optional valency, role, contrast, and diagnosis blocks keep simple examples small while allowing expert cases to carry the required evidence. `additionalProperties` is intentionally open for future controlled extensions; new fields still need a guideline and validator rule before they become project conventions.
 
-The required top-level fields are `schema_version`, `id`, `sentence`, `capability_tags`, `difficulty`, `source_type`, `framework`, `sentence_type`, `clauses`, `constituents`, `words`, `dependencies`, one of `canonical_analysis` or the V0.1 compatibility field `preferred_analysis`, `explanation`, and `split`. Optional fields capture valency, semantic roles, contrasts, construction signatures, predicands, fusion relations, ambiguity, alternatives, rejected analyses, pedagogical aliases, and error diagnosis.
+The required top-level fields are `schema_version: "0.4"`, `id`, `sentence`, `capability_tags`, `difficulty`, `source_type`, `framework`, `sentence_type`, `annotation_scope`, `clauses`, `constituents`, `words`, `dependencies`, `canonical_analysis` (with typed analysis), `explanation`, and `split`. Optional fields capture `construction_tags`, valency, semantic roles, contrasts, construction signatures, predicands, fusion relations, ambiguity, alternatives, rejected analyses, pedagogical aliases, and error diagnosis.
 
 Use optional `heads`, `complements`, and `adjuncts` lists when a compact index is useful; their values point to constituent/clause IDs. The detailed category/function evidence still belongs on each constituent, so these convenience lists never replace the analysis.
 
@@ -22,17 +26,17 @@ Use optional `heads`, `complements`, and `adjuncts` lists when a compact index i
 
 Keep these dimensions independent in every annotation:
 
-* **Lexical category** is the word-level class: noun, verb, adjective, adverb, preposition, determiner, pronoun, coordinator, subordinator, auxiliary, modal, particle, numeral, interjection, or punctuation. The `words[].lexical_category` field records it; V0.2 external mappings belong in `words[].external_pos_tags` as `{tagset, tag}` objects. `words[].pos` is V0.1 compatibility only.
+* **Lexical category** is the word-level class: noun, verb, adjective, adverb, preposition, **determinative**, pronoun, coordinator, subordinator, auxiliary, modal, particle, numeral, interjection, or punctuation. The `words[].lexical_category` field records it; V0.4 external mappings belong in `words[].external_pos_tags` as `{tagset, tag}` objects. `words[].pos` is migration-only. The syntactic function is `determiner`, never a lexical-category value. Relative `that`, for-to `for`, and copular `be` use a namespaced unresolved candidate object until review.
 * **Phrase category** is the category of a phrase constituent: `NP`, `VP`, `PP`, `AdjP`, `AdvP`, and so on. It is recorded in `constituents[].phrase_category` when `node_kind: "phrase"`.
-* **Clause category** is recorded in `clauses[].clause_category` when `node_kind: "clause"`; a clause-valued constituent uses `clause_ref`, not phrase category `Clause`.
-* **Syntactic function** is the job performed in a larger construction: subject, object, selected complement, adjunct, predicative complement, relative modifier, etc. It is recorded in `constituents[].function` and `clauses[].function`.
+* **Clause ontology** is split across `clauses[].finiteness`, `clause_form`, `clause_construction`, and composable `integration` relations; a clause-valued constituent uses `clause_ref`, an external `function`, and an explicit `realization` relation.
+* **Syntactic function** is the job performed in a larger construction: subject, object, selected complement, adjunct, predicative complement, relative modifier, etc. It is recorded in `constituents[].function`; a clause node has no authoritative function.
 * **Semantic role** is a participant or circumstance interpretation (Agent, Theme, Location, Experiencer, and similar). It belongs only in `semantic_roles` and never substitutes for a syntactic function.
 
 Thus a PP functioning as an adverbial remains `phrase_category: "PP"`; it is never relabelled `AdvP`. Conversely, an AdvP is not made a PP merely because it expresses location.
 
 ## Preferred analyses and alternatives
 
-`framework.preferred` identifies the framework used for the default analysis. Use `cgel_inspired` for the project's modern descriptive default (`CGEL` remains a V0.1 compatibility spelling), `traditional_pedagogical` for an explicitly traditional lesson, `modern_descriptive` for a non-CGEL modern analysis, and `mixed` only when the example deliberately compares frameworks. Mature alternatives go in `framework.alternatives` and `alternative_analyses`; they must be marked `status: "established"` and described. Do not invent an alternative just to appear comprehensive. `rejected_analyses` is for common or tempting analyses that are wrong for the stated framework, with a reason.
+`framework.preferred` identifies the framework used for the default analysis. Use `cgel_inspired` for the project's modern descriptive default (`CGEL` remains a V0.1 compatibility spelling), `traditional_pedagogical`, `universal_dependencies`, or `generative` only when explicitly attributed, and `mixed` only when the example deliberately compares frameworks. Mature or unresolved alternatives go only in `alternative_analyses`; every entry needs a stable ID, framework, status, and typed analysis. Link an alternative to the exact wrappers, constituents, clauses, or relations whose competing realization it authorizes. Do not use `framework.alternatives` or `framework_alternatives` in V0.4, and do not invent an alternative just to appear comprehensive. `rejected_analyses` is for common or tempting analyses that are wrong for the stated framework, with a reason.
 
 ## Complement vs adjunct
 
@@ -40,13 +44,23 @@ Use lexical selection and constructional licensing, not a question test alone. I
 
 ## Non-finite clauses
 
-Annotate **Having completed the checklist, the crew started the engines** as a `gerund_participial_clause` with `finiteness: "non-finite"`, function `supplementary_adverbial`, and understood subject/predicand `the crew`. The modern analysis calls it a non-finite perfect gerund-participial clause. A traditional source may call it a “participial phrase”; record that as an established alternative, never as a reason to deny clause status (“no finite verb, therefore not a clause”). The same policy applies to infinitival clauses: **To reduce noise, the operator closed the hatch** has a non-finite infinitival clause.
+Annotate **Having completed the checklist, the crew started the engines** as a clause with `finiteness: "nonfinite"`, `clause_form: "gerund_participial"`, `clause_construction: "other"`, and `integration: ["supplementary"]`; record the understood subject/predicand `the crew` separately. Any external function such as `supplementary_adverbial` belongs on its clause-valued constituent wrapper. A traditional source may call it a “participial phrase”; record that as an established alternative, never as a reason to deny clause status (“no finite verb, therefore not a clause”). The same policy applies to infinitival clauses: **To reduce noise, the operator closed the hatch** has a `nonfinite` + `to_infinitival` clause.
 
 ## Relatives and interrogatives
 
-**What he said surprised everyone** is a CGEL-style fused-relative construction (a fused-relative NP): the `what` element fuses the nominal and relativized functions. Traditional grammar may call it a nominal/free relative clause. **I wonder what he said** is an embedded interrogative construction, not a fused relative; its clause functions as the complement of *wonder*. Relative clauses modifying an overt head (for example, **the report that we filed**) must be distinguished from both.
+**What he said surprised everyone** and **I wonder what he said** are retained as
+contrastive legacy examples, but V0.4 does not make their fused-relative or
+interrogative-vs-relative analysis canonical. Record the competing,
+framework-attributed analyses in typed objects and keep the record
+`review_required` until adjudication. Relative clauses modifying an overt head
+(for example, **the report that we filed**) remain a separate construction
+record, with framework-sensitive details explicitly attributed.
 
-## Perception, control, raising, and ECM
+## Perception, control, raising, and ECM (future adjudication)
+
+The examples below preserve legacy task evidence only. V0.4 does not make
+these analyses canonical; use typed framework analyses and
+`review_status: "review_required"` until independent adjudication.
 
 Record the embedded clause and understood-subject relation explicitly.
 
@@ -69,4 +83,4 @@ An `error_diagnosis` object stores the student's/model's claim and one or more d
 
 ## Review checklist
 
-Before accepting an example, check token spans, unique IDs, lexical/phrase/function separation, finiteness, node kinds, external POS tagsets, head/dependency/predicand/fusion references, framework status, ambiguity calibration, construction signatures, review metadata, and split. Use `review_status: "review_required"` when a structural boundary cannot be repaired without a linguistic decision. Run `.venv/bin/python scripts/validate_dataset.py <files> --benchmark eval/benchmark_v1.jsonl` and `.venv/bin/python scripts/check_contamination.py <train-or-generated-files> --benchmark eval/benchmark_v1.jsonl` before publishing. The validator executes the Draft 2020-12 JSON Schema engine, checks sentence/words alignment and reference types, and sends every benchmark row through the same full record validation. Rendered assistant content is parsed as JSON and validated as a complete canonical target. These are machine-structural guarantees, not linguistic adjudication; a structurally valid benchmark record is not automatically `canonical_gold`. V0.1 records remain readable for migration; new records should use `schema_version: "0.2"`, `canonical_analysis`, `node_kind`, `phrase_category`/`clause_category`, and `external_pos_tags`.
+Before accepting an example, check token spans, unique IDs, lexical/phrase/function separation, `finiteness`/`clause_form`/`clause_construction`/`integration`, scoped coverage metadata, node kinds, external POS tagsets, head/dependency/predicand/fusion references, framework status, ambiguity calibration, construction signatures, review metadata, and split. Use `review_status: "review_required"` when a structural boundary cannot be repaired without a linguistic decision. Run `.venv/bin/python scripts/validate_dataset.py <files> --benchmark eval/benchmark_v1.jsonl` and `.venv/bin/python scripts/check_contamination.py <train-or-generated-files> --benchmark eval/benchmark_v1.jsonl` before publishing. The validator executes the Draft 2020-12 JSON Schema engine, checks sentence/words alignment and reference types, and sends every benchmark row through the same full record validation. Rendered assistant content is parsed as JSON and validated as a linguistic projection. These are machine-structural guarantees, not linguistic adjudication; a structurally valid benchmark record is not automatically approved for training or `canonical_gold`. V0.1/V0.2 records remain readable for migration; new records should use `schema_version: "0.4"`, `annotation_scope`, typed `canonical_analysis`, `node_kind`, `phrase_category`, the orthogonal clause fields, and `external_pos_tags`.

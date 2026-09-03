@@ -1,12 +1,12 @@
-# Capability taxonomy (V0.2)
+# Capability taxonomy (V0.4)
 
-Tags are intentionally finite and stable. Apply the smallest set that describes what a learner must reason about; do not add a tag for every construction name.
+Tags are intentionally finite and stable. `capability_tags` describe what a learner must reason about; they do not assert that the sentence contains the named construction. Apply the smallest set that describes the task. If structural presence must be asserted, use the separate `construction_tags` field.
 
 | Tag | Definition | Typical evidence |
 | --- | --- | --- |
 | `basic_constituency` | Nested spans and constituency boundaries | NP/VP/Clause bracketing |
 | `clause_structure` | Clause boundaries, embedding, and clause relations | finite content clause; coordination |
-| `pos` | Word-level lexical category/POS | noun vs determiner vs auxiliary |
+| `pos` | Word-level lexical category/POS | noun vs determinative vs auxiliary |
 | `phrase_category` | Category of a phrase (not a clause) | PP, AdjP, NP |
 | `syntactic_function` | Function in a larger unit | subject, object, adjunct |
 | `complement_adjunct` | Selection versus optional modification | selected locative PP |
@@ -30,4 +30,8 @@ Tags are intentionally finite and stable. Apply the smallest set that describes 
 | `framework_distinction` | Explicit comparison of mature frameworks | CGEL vs pedagogical label |
 | `error_diagnosis` | Diagnosis of a proposed analysis | level, verdict, correction |
 
-Tags are not ordered and are not scores. Benchmark coverage is audited by `tests/test_data_pipeline.py` and should be revisited whenever the taxonomy changes.
+Tags are not ordered and are not scores. A tag is not construction-presence
+evidence: use `construction_tags` for presence and
+`annotation_scope.dimensions` for the dimensions that a scorer may evaluate.
+Benchmark coverage is audited by the ontology regression tests and should be
+revisited whenever the taxonomy changes.

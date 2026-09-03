@@ -1,10 +1,10 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://english-syntax-tutor.local/schema/rendered-sft-target-0.2.1.json",
-  "title": "English Syntax Tutor rendered SFT target",
+  "$id": "https://english-syntax-tutor.local/schema/rendered-sft-target-0.4.json",
+  "title": "English Syntax Tutor V0.4 rendered SFT target",
   "type": "object",
   "additionalProperties": false,
-  "required": ["id", "messages"],
+  "required": ["id", "messages", "governance_sidecar"],
   "properties": {
     "id": {"type": "string", "minLength": 1},
     "messages": {
@@ -17,6 +17,24 @@
         {"$ref": "#/$defs/assistantMessage"}
       ],
       "items": false
+    },
+    "governance_sidecar": {
+      "type": "object", "additionalProperties": true, "required": ["record_id", "schema_version", "split"],
+      "properties": {
+        "record_id": {"type": "string", "minLength": 1},
+        "schema_version": {"const": "0.4"},
+        "split": {"enum": ["train", "validation", "benchmark"]},
+        "source_type": {"type": ["string", "null"]}, "difficulty": {"type": ["string", "null"]},
+        "review_metadata": {"type": ["object", "null"]},
+        "migration_metadata": {"type": ["object", "null"]},
+        "migration_review_required": {"type": ["boolean", "null"]},
+        "migration_note": {"type": ["string", "null"]},
+        "provenance": {}, "annotation_scope": {"type": ["object", "null"]},
+        "legacy_annotation_scope": {"type": ["object", "null"]},
+        "legacy_annotations": {"type": "object"},
+        "capability_tags": {"type": ["array", "null"]},
+        "content_flags": {"type": "array", "items": {"type": "string"}}
+      }
     }
   },
   "$defs": {

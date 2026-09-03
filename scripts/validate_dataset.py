@@ -21,16 +21,18 @@ except ImportError:  # pragma: no cover - exercised by the CLI failure path
 
 try:
     from data_common import (
-        ALTERNATIVE_CONSTRUCTION_WHITELIST, AMBIGUITY_STATUSES, CAPABILITY_TAGS,
-        CLAUSE_CATEGORIES, DIFFICULTIES, FRAMEWORKS, LEXICAL_CATEGORIES,
+        AMBIGUITY_STATUSES, ANNOTATED_DIMENSIONS, ANNOTATION_COVERAGES,
+        CANONICAL_SCHEMA_VERSION, LEGACY_SCHEMA_VERSIONS,
+        CAPABILITY_TAGS, CANONICAL_FRAMEWORK, CLAUSE_CONSTRUCTIONS, CLAUSE_FINITE_VALUES, CLAUSE_FORMS, CLAUSE_INTEGRATIONS, CLAUSE_STATUSES, CLAUSE_TYPES, DIFFICULTIES, FRAMEWORKS, LEXICAL_CATEGORIES,
         PHRASE_CATEGORIES, SCHEMA_VERSIONS, SEMANTIC_ROLES, SENTENCE_CLASSIFICATION_LABELS, SENTENCE_TYPES,
         SOURCE_TYPES, SPLITS, construction_signature, iter_jsonl_paths, normalized_text,
         normalized_surface_tokens, read_jsonl, sentence_from_record, sentence_word_alignment,
     )
 except ImportError:
     from scripts.data_common import (
-        ALTERNATIVE_CONSTRUCTION_WHITELIST, AMBIGUITY_STATUSES, CAPABILITY_TAGS,
-        CLAUSE_CATEGORIES, DIFFICULTIES, FRAMEWORKS, LEXICAL_CATEGORIES,
+        AMBIGUITY_STATUSES, ANNOTATED_DIMENSIONS, ANNOTATION_COVERAGES,
+        CANONICAL_SCHEMA_VERSION, LEGACY_SCHEMA_VERSIONS,
+        CAPABILITY_TAGS, CANONICAL_FRAMEWORK, CLAUSE_CONSTRUCTIONS, CLAUSE_FINITE_VALUES, CLAUSE_FORMS, CLAUSE_INTEGRATIONS, CLAUSE_STATUSES, CLAUSE_TYPES, DIFFICULTIES, FRAMEWORKS, LEXICAL_CATEGORIES,
         PHRASE_CATEGORIES, SCHEMA_VERSIONS, SEMANTIC_ROLES, SENTENCE_CLASSIFICATION_LABELS, SENTENCE_TYPES,
         SOURCE_TYPES, SPLITS, construction_signature, iter_jsonl_paths, normalized_text,
         normalized_surface_tokens, read_jsonl, sentence_from_record, sentence_word_alignment,
@@ -39,12 +41,59 @@ except ImportError:
 
 REQUIRED = {
     "schema_version", "id", "sentence", "capability_tags", "difficulty", "source_type",
-    "framework", "sentence_type", "clauses", "constituents", "words", "dependencies",
+    "framework", "sentence_type", "annotation_scope", "clauses", "constituents", "words", "dependencies",
     "explanation", "split",
 }
 ANALYSIS_LEVELS = {"lexical_category", "phrase_category", "syntactic_function", "clause_structure", "framework", "semantic_role", "span", "none"}
-REVIEW_STATUSES = {"schema_migrated", "structurally_validated", "review_required", "linguistically_reviewed", "canonical_gold"}
+FRAMEWORK_SENSITIVE_ANALYSIS_TYPES = {"ecm", "small_clause", "ud_pos", "ptb_pos", "gerund_as_noun", "control", "raising", "perception", "perception_construction"}
+REVIEW_STATUSES = {"schema_migrated", "structurally_validated", "review_required", "linguistically_reviewed", "approved_for_training", "canonical_gold"}
 REVIEWER_TYPES = {"automated_structural", "independent_linguistic", "human_annotation", "mixed"}
+APPROVED_REVIEW_STATUSES = {"approved_for_training", "canonical_gold"}
+ALTERNATIVE_STATUSES = {"established", "unresolved", "review_required"}
+TYPED_REFERENCE_NAMESPACES = {"word", "constituent", "clause", "analysis"}
+CORE_TYPED_RELATION_TYPES = {
+    "attachment", "construction", "control", "coreference", "cross_node",
+    "dependency", "framework_relation", "predication", "raising",
+    "realization_link", "selection",
+}
+BINARY_TYPED_RELATION_TYPES = CORE_TYPED_RELATION_TYPES
+CANONICAL_SCALAR_RELATION_TYPES = {
+    "category", "clause_construction", "clause_integration", "constituent_function",
+    "external_realization", "finiteness", "function", "integration", "realization", "realization_link",
+    "lexical_category", "phrase_category", "syntactic_function",
+}
+ALTERNATIVE_LINK_FIELDS = {
+    "linked_wrapper_ids", "linked_constituent_ids", "linked_clause_refs", "linked_relation_ids",
+}
+AMBIGUITY_LINK_FIELDS = {
+    "alternative_ids", "wrapper_ids", "relation_ids", "constituent_ids", "clause_refs",
+}
+CAPABILITY_DIMENSIONS = {
+    "basic_constituency": {"phrase_constituency", "constituency"},
+    "phrase_category": {"phrase_constituency", "constituency"},
+    "pos": {"lexical_category"},
+    "syntactic_function": {"syntactic_function"},
+    "complement_adjunct": {"syntactic_function", "vp_complementation"},
+    "lexical_valency": {"lexical_valency", "vp_complementation"},
+    "clause_structure": {"clause_ontology", "clause_structure"},
+    "relative_clause": {"clause_ontology", "clause_structure"},
+    "interrogative_clause": {"clause_ontology", "clause_structure"},
+    "nonfinite_clause": {"clause_ontology", "clause_structure"},
+    "gerund_participial": {"clause_ontology", "clause_structure"},
+    "infinitival": {"clause_ontology", "clause_structure"},
+    "semantic_roles": {"semantic_roles"},
+    "framework_distinction": {"framework_mapping"},
+    "coordination": {"construction_relations", "clause_ontology"},
+    "fused_relative": {"construction_relations", "clause_ontology"},
+    "control": {"clause_ontology", "lexical_valency", "vp_complementation"},
+    "raising": {"clause_ontology", "lexical_valency", "vp_complementation"},
+    "ecm": {"clause_ontology", "lexical_valency", "vp_complementation"},
+    "perception_construction": {"clause_ontology", "lexical_valency", "vp_complementation"},
+    "predicative_complement": {"syntactic_function", "lexical_valency", "vp_complementation"},
+    "pp_attachment": {"phrase_constituency", "syntactic_function"},
+    "ambiguity": {"phrase_constituency", "clause_ontology", "construction_relations"},
+    "error_diagnosis": {"syntactic_function", "clause_ontology", "framework_mapping"},
+}
 
 
 @lru_cache(maxsize=4)
@@ -103,8 +152,43 @@ def _error(errors: list[str], location: str, message: str) -> None:
     errors.append(f"{location}: {message}")
 
 
+def _rendered_governance_leaks(value: Any, context: str | None = None, path: str = "") -> list[str]:
+    """Find governance/legacy keys that escaped the renderer allowlist."""
+    leaks: list[str] = []
+    forbidden = {
+        "schema_version", "split", "source_type", "difficulty", "capability_tags", "annotation_scope",
+        "review_metadata", "migration_metadata", "migration_review_required", "migration_note", "provenance",
+        "legacy_preferred_analysis", "legacy_annotation_scope", "legacy_annotations", "review_required",
+        "legacy_function", "legacy_clause_category", "legacy_pos",
+    }
+    if isinstance(value, dict):
+        for key, item in value.items():
+            key_path = f"{path}.{key}" if path else key
+            if key in forbidden or (key == "status" and context != "ambiguity"):
+                leaks.append(key_path)
+                continue
+            child_context = {
+                "ambiguity": "ambiguity", "analyses": "ambiguity_analysis", "clauses": "clause",
+                "constituents": "constituent", "words": "word", "dependencies": "dependency",
+                "typed_analysis": "typed_analysis", "lexical_analysis": "lexical_analysis",
+            }.get(key)
+            leaks.extend(_rendered_governance_leaks(item, child_context, key_path))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            leaks.extend(_rendered_governance_leaks(item, context, f"{path}[{index}]"))
+    return leaks
+
+
 def _is_v2(record: dict[str, Any]) -> bool:
     return record.get("schema_version") == "0.2"
+
+
+def _is_v3(record: dict[str, Any]) -> bool:
+    return record.get("schema_version") in {"0.3", CANONICAL_SCHEMA_VERSION}
+
+
+def _is_v4(record: dict[str, Any]) -> bool:
+    return record.get("schema_version") == CANONICAL_SCHEMA_VERSION
 
 
 def _valid_ref(value: Any, ids: set[str]) -> bool:
@@ -129,6 +213,190 @@ def _require_ref_kind(value: Any, objects: dict[str, dict[str, Any]], kinds: set
         _error(errors, location, f"{description} must reference {expected}; got {value!r} ({kind or 'unknown'})")
 
 
+def _typed_reference_ids(record: dict[str, Any]) -> dict[str, set[str]]:
+    def ids(collection: Any) -> set[str]:
+        return {
+            item.get("id") for item in collection
+            if isinstance(item, dict) and isinstance(item.get("id"), str)
+        } if isinstance(collection, list) else set()
+
+    return {
+        "word": ids(record.get("words")),
+        "constituent": ids(record.get("constituents")),
+        "clause": ids(record.get("clauses")),
+    }
+
+
+def _validate_typed_reference(
+    reference: Any,
+    location: str,
+    reference_ids: dict[str, set[str]],
+    analysis_entity_ids: set[str],
+    errors: list[str],
+) -> None:
+    if isinstance(reference, str) and ":" in reference:
+        namespace, identifier = reference.split(":", 1)
+    elif isinstance(reference, dict):
+        namespace = reference.get("namespace")
+        identifier = reference.get("id")
+    else:
+        _error(errors, location, "typed reference must be a namespaced string or object with namespace and id")
+        return
+    if namespace not in TYPED_REFERENCE_NAMESPACES or not isinstance(identifier, str) or not identifier:
+        _error(errors, location, "typed reference requires a known namespace and non-empty id")
+        return
+    allowed = analysis_entity_ids if namespace == "analysis" else reference_ids.get(namespace, set())
+    if identifier not in allowed:
+        _error(errors, location, f"dangling typed {namespace} reference {identifier!r}")
+
+
+def _validate_typed_analysis(
+    typed: Any,
+    location: str,
+    record: dict[str, Any],
+    errors: list[str],
+    *,
+    preferred_authority: bool,
+) -> set[str]:
+    relation_ids: set[str] = set()
+    if not isinstance(typed, dict):
+        return relation_ids
+    reference_ids = _typed_reference_ids(record)
+    canonical_dependencies = record.get("dependencies") if isinstance(record.get("dependencies"), list) else []
+    canonical_dependency_pairs = {
+        (dependency.get("head"), dependency.get("dependent"))
+        for dependency in canonical_dependencies
+        if isinstance(dependency, dict) and isinstance(dependency.get("head"), str) and isinstance(dependency.get("dependent"), str)
+    }
+    entity_ids: set[str] = set()
+    entities = typed.get("entities", [])
+    if not isinstance(entities, list):
+        _error(errors, f"{location}.entities", "typed analysis entities must be an array")
+        entities = []
+    for index, entity in enumerate(entities):
+        entity_location = f"{location}.entities[{index}]"
+        if not isinstance(entity, dict) or not isinstance(entity.get("id"), str) or not entity.get("id") or not isinstance(entity.get("kind"), str) or not entity.get("kind"):
+            _error(errors, entity_location, "analysis-local entity requires stable id and kind")
+            continue
+        if entity["id"] in entity_ids:
+            _error(errors, entity_location, f"duplicate analysis-local entity id {entity['id']!r}")
+        entity_ids.add(entity["id"])
+    relations = typed.get("relations", [])
+    if not isinstance(relations, list):
+        _error(errors, f"{location}.relations", "typed analysis relations must be an array")
+        return relation_ids
+    for index, relation in enumerate(relations):
+        relation_location = f"{location}.relations[{index}]"
+        if not isinstance(relation, dict):
+            _error(errors, relation_location, "typed relation must be an object")
+            continue
+        relation_id = relation.get("id")
+        if not isinstance(relation_id, str) or not relation_id:
+            _error(errors, relation_location, "typed relation requires a stable non-empty id")
+        elif relation_id in relation_ids:
+            _error(errors, relation_location, f"duplicate typed relation id {relation_id!r}")
+        else:
+            relation_ids.add(relation_id)
+        relation_type = relation.get("type")
+        if not isinstance(relation_type, str) or not relation_type:
+            _error(errors, relation_location, "typed relation requires a non-empty relation type")
+        else:
+            if relation_type in CANONICAL_SCALAR_RELATION_TYPES:
+                _error(
+                    errors,
+                    relation_location,
+                    f"typed relation {relation_type!r} duplicates a canonical scalar authority layer",
+                )
+            if relation_type not in CORE_TYPED_RELATION_TYPES and relation_type not in CANONICAL_SCALAR_RELATION_TYPES:
+                qualified_type = ":" in relation_type or "/" in relation_type
+                qualified_metadata = isinstance(relation.get("namespace"), str) and bool(relation.get("namespace"))
+                qualified_metadata = qualified_metadata or _known(relation.get("framework"), FRAMEWORKS)
+                if not qualified_type and not qualified_metadata:
+                    _error(errors, relation_location, "unknown extension relation requires an explicit namespace, qualified type, or known framework")
+        if relation.get("framework") is not None and not _known(relation.get("framework"), FRAMEWORKS):
+            _error(errors, relation_location, "typed relation framework must name a known framework")
+        if relation_type == "framework_relation" and not _known(relation.get("framework"), FRAMEWORKS) and not (isinstance(relation.get("namespace"), str) and relation.get("namespace")):
+            _error(errors, relation_location, "framework_relation requires framework or namespace attribution")
+        arity = relation.get("arity")
+        has_target_field = "target" in relation
+        has_target = has_target_field and relation.get("target") is not None
+        if arity is None:
+            _error(errors, relation_location, "typed relation requires explicit arity")
+        elif arity not in {"unary", "binary"}:
+            _error(errors, relation_location, "typed relation arity must be unary or binary")
+        if arity == "binary" and not has_target:
+            _error(errors, relation_location, "binary typed relation requires target")
+        if arity == "unary" and has_target_field:
+            _error(errors, relation_location, "unary typed relation cannot carry target")
+        if relation_type in BINARY_TYPED_RELATION_TYPES and not has_target:
+            _error(errors, relation_location, f"binary typed relation type {relation_type!r} requires target")
+        _validate_typed_reference(relation.get("source"), f"{relation_location}.source", reference_ids, entity_ids, errors)
+        if has_target:
+            _validate_typed_reference(relation.get("target"), f"{relation_location}.target", reference_ids, entity_ids, errors)
+        if preferred_authority and relation_type == "dependency" and has_target:
+            source_id = _typed_reference_identifier(relation.get("source"))
+            target_id = _typed_reference_identifier(relation.get("target"))
+            if (source_id, target_id) in canonical_dependency_pairs:
+                _error(errors, relation_location, "typed dependency duplicates the canonical dependencies layer")
+    return relation_ids
+
+
+def _authoritative_alternative_key(alternative: dict[str, Any]) -> str:
+    typed = alternative.get("typed_analysis")
+    typed_authority = {}
+    if isinstance(typed, dict):
+        typed_authority = {
+            key: typed[key] for key in ("kind", "framework", "status", "arguments", "entities", "relations")
+            if key in typed
+        }
+        if isinstance(typed_authority.get("entities"), list):
+            typed_authority["entities"] = [
+                {key: entity[key] for key in ("kind",) if key in entity}
+                for entity in typed_authority["entities"]
+                if isinstance(entity, dict)
+            ]
+        if isinstance(typed_authority.get("relations"), list):
+            typed_authority["relations"] = [
+                {key: relation[key] for key in ("type", "arity", "source", "target", "framework", "namespace", "status") if key in relation}
+                for relation in typed_authority["relations"]
+                if isinstance(relation, dict)
+            ]
+    return json.dumps(
+        {
+            "framework": alternative.get("framework"),
+            "status": alternative.get("status"),
+            "typed_analysis": typed_authority,
+            "links": {key: alternative.get(key) for key in sorted(ALTERNATIVE_LINK_FIELDS) if key in alternative},
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _linked_ids(item: Any, fields: set[str]) -> set[str]:
+    if not isinstance(item, dict):
+        return set()
+    linked: set[str] = set()
+    for field in fields:
+        values = item.get(field)
+        if isinstance(values, list):
+            linked.update(value for value in values if isinstance(value, str))
+    for field in ("attachment", "target", "constituent", "clause"):
+        if isinstance(item.get(field), str):
+            linked.add(item[field])
+    return linked
+
+
+def _typed_reference_identifier(reference: Any) -> str | None:
+    if isinstance(reference, dict) and isinstance(reference.get("id"), str):
+        return reference["id"]
+    if isinstance(reference, str) and ":" in reference:
+        _, identifier = reference.split(":", 1)
+        return identifier or None
+    return None
+
+
 def _validate_review_metadata(record: dict[str, Any], location: str, errors: list[str]) -> None:
     metadata = record.get("review_metadata")
     if metadata is None:
@@ -140,28 +408,90 @@ def _validate_review_metadata(record: dict[str, Any], location: str, errors: lis
         _error(errors, f"{location}.review_metadata", "review_status must be a known governance status")
     if not _known(metadata.get("reviewer_type"), REVIEWER_TYPES):
         _error(errors, f"{location}.review_metadata", "reviewer_type must be a known reviewer type")
-    elif _known(metadata.get("review_status"), {"linguistically_reviewed", "canonical_gold"}) and metadata.get("reviewer_type") == "automated_structural":
-        _error(errors, f"{location}.review_metadata", "linguistic/canonical status requires a human or mixed reviewer type")
+    elif _known(metadata.get("review_status"), {"linguistically_reviewed", "approved_for_training", "canonical_gold"}) and metadata.get("reviewer_type") == "automated_structural":
+        _error(errors, f"{location}.review_metadata", "linguistic/training/canonical status requires a human or mixed reviewer type")
     if not isinstance(metadata.get("migration_version"), str) or not metadata["migration_version"]:
         _error(errors, f"{location}.review_metadata", "migration_version must be a non-empty string")
+    elif _is_v4(record) and not metadata.get("migration_version"):
+        _error(errors, f"{location}.review_metadata", "V0.4 records require migration_version for process provenance")
     if "review_date" in metadata and (not isinstance(metadata["review_date"], str) or not metadata["review_date"]):
         _error(errors, f"{location}.review_metadata", "review_date must be a non-empty string when supplied")
+    if metadata.get("review_status") == "canonical_gold":
+        words = record.get("words") if isinstance(record.get("words"), list) else []
+        clauses = record.get("clauses") if isinstance(record.get("clauses"), list) else []
+        unresolved = any(isinstance(word, dict) and isinstance(word.get("lexical_analysis"), dict) and word["lexical_analysis"].get("status") == "unresolved" for word in words)
+        unresolved = unresolved or any(
+            isinstance(clause, dict)
+            and (
+                clause.get("clause_construction") == "unresolved"
+                or "unresolved" in (clause.get("integration") or [])
+                or clause.get("finiteness") == "unspecified"
+                or clause.get("clause_form") == "unspecified"
+            )
+            for clause in clauses
+        )
+        unresolved = unresolved or any(
+            isinstance(analysis, dict)
+            and isinstance(analysis.get("typed_analysis"), dict)
+            and analysis["typed_analysis"].get("status") in {"unresolved", "review_required"}
+            for analysis in (record.get("canonical_analysis"), record.get("preferred_analysis"))
+        )
+        unresolved = unresolved or record.get("migration_review_required") is True
+        all_alternatives = record.get("alternative_analyses", [])
+        if not isinstance(all_alternatives, list):
+            all_alternatives = []
+        unresolved = unresolved or any(
+            isinstance(analysis, dict) and isinstance(analysis.get("typed_analysis"), dict)
+            and analysis["typed_analysis"].get("status") in {"unresolved", "review_required"}
+            for analysis in all_alternatives
+        )
+        if isinstance(record.get("annotation_scope"), dict):
+            required_dimensions = {"tokens", "lexical_category", "phrase_constituency", "clause_ontology", "syntactic_function"}
+            declared = {
+                entry.get("dimension") for entry in record["annotation_scope"].get("dimensions", [])
+                if isinstance(entry, dict)
+                and entry.get("omission") == "none"
+                and entry.get("completeness") == "complete"
+                and isinstance(entry.get("scope"), dict)
+                and entry["scope"].get("kind") == "record"
+            }
+            if not required_dimensions.issubset(declared):
+                unresolved = True
+        if unresolved:
+            _error(errors, f"{location}.review_metadata", "unresolved lexical or clause analysis cannot be canonical_gold")
 
 
 def _validate_analysis(item: Any, location: str, errors: list[str], alternative: bool = False) -> None:
-    if not isinstance(item, dict) or not item.get("label") or not isinstance(item.get("claims"), list) or not item.get("claims") or any(not isinstance(claim, str) or not claim for claim in item.get("claims", [])):
-        _error(errors, location, "analysis requires a non-empty label and claims list")
+    if not isinstance(item, dict):
+        _error(errors, location, "analysis must be an object")
         return
     if alternative:
+        if not isinstance(item.get("id"), str) or not item.get("id"):
+            _error(errors, location, "alternative analysis requires a stable non-empty id")
         if not _known(item.get("framework"), FRAMEWORKS):
             _error(errors, location, "alternative analysis must name a known framework")
-        if item.get("status") != "established":
-            _error(errors, location, "alternative analysis status must be 'established'")
-        analysis_type = item.get("analysis_type")
-        if analysis_type == "small_clause":
-            construction = item.get("construction_type")
-            if not _known(construction, ALTERNATIVE_CONSTRUCTION_WHITELIST["small_clause"]):
-                _error(errors, location, "small-clause alternatives require an approved construction-specific whitelist entry")
+        if item.get("status") not in ALTERNATIVE_STATUSES:
+            _error(errors, location, "alternative analysis status must be established, unresolved, or review_required")
+    else:
+        if not item.get("label") or not isinstance(item.get("claims"), list) or not item.get("claims") or any(not isinstance(claim, str) or not claim for claim in item.get("claims", [])):
+            _error(errors, location, "canonical analysis requires a non-empty label and claims list")
+        if item.get("framework") is not None and not _known(item.get("framework"), FRAMEWORKS):
+            _error(errors, location, "analysis framework attribution must name a known framework")
+        typed = item.get("typed_analysis")
+        if item.get("analysis_type") in FRAMEWORK_SENSITIVE_ANALYSIS_TYPES and item.get("framework") is None and not (isinstance(typed, dict) and _known(typed.get("framework"), FRAMEWORKS)):
+            _error(errors, location, "framework-sensitive analysis_type requires explicit framework attribution")
+    if alternative and "claims" in item and (not isinstance(item.get("claims"), list) or not item.get("claims") or any(not isinstance(claim, str) or not claim for claim in item.get("claims", []))):
+        _error(errors, location, "alternative claims must be a non-empty string list when supplied")
+    typed = item.get("typed_analysis")
+    if not isinstance(typed, dict):
+        _error(errors, location, "machine-authoritative analysis requires typed_analysis; claims prose is explanatory only")
+    elif (not _known(typed.get("framework"), FRAMEWORKS) or not typed.get("kind") or typed.get("status") not in {"descriptive", "established", "unresolved", "review_required"}):
+        _error(errors, location, "typed_analysis requires kind, known framework, and a valid status")
+    elif alternative:
+        if typed.get("framework") != item.get("framework"):
+            _error(errors, location, "alternative framework must agree with typed_analysis.framework")
+        if typed.get("status") != item.get("status"):
+            _error(errors, location, "alternative status must agree with typed_analysis.status")
 
 
 def _validate_predicand(value: Any, location: str, ids: set[str], objects: dict[str, dict[str, Any]], version: str, errors: list[str]) -> None:
@@ -180,12 +510,176 @@ def _validate_predicand(value: Any, location: str, ids: set[str], objects: dict[
     if value["kind"] in {"overt_constituent", "implicit_control"}:
         if not isinstance(target, str) or target not in ids:
             _error(errors, location, "overt_constituent and implicit_control predicands require a known target")
-        elif value["kind"] == "overt_constituent":
-            target_object = objects.get(target)
-            if not target_object or target_object.get("node_kind") != "phrase" or target_object.get("phrase_category") != "NP":
-                _error(errors, location, "overt_constituent predicands must target an NP constituent, not a word or determiner")
     elif target is not None and (not isinstance(target, str) or target not in ids):
         _error(errors, location, "predicand target must reference a known ID when supplied")
+
+
+def _validate_coverage(record: dict[str, Any], location: str, errors: list[str]) -> None:
+    scope = record.get("annotation_scope")
+    if not isinstance(scope, dict):
+        _error(errors, location, "annotation_scope must be an object")
+        return
+    coverage = scope.get("coverage")
+    if not _known(coverage, ANNOTATION_COVERAGES):
+        _error(errors, f"{location}.annotation_scope", "coverage must be complete_constituency or task_focused_partial")
+    dimensions = scope.get("dimensions")
+    if not isinstance(dimensions, list) or not dimensions:
+        _error(errors, f"{location}.annotation_scope", "dimensions must declare dimension, scope, completeness, and omission")
+        dimensions = []
+    legacy_annotated = set(scope.get("annotated_dimensions", [])) if isinstance(scope.get("annotated_dimensions"), list) else set()
+    legacy_omitted = set(scope.get("intentionally_omitted", [])) if isinstance(scope.get("intentionally_omitted"), list) else set()
+    if "annotated_dimensions" in scope and (not isinstance(scope.get("annotated_dimensions"), list) or any(not _known(value, ANNOTATED_DIMENSIONS) for value in scope.get("annotated_dimensions", []))):
+        _error(errors, f"{location}.annotation_scope", "annotated_dimensions contains an unknown dimension")
+    if "intentionally_omitted" in scope and (not isinstance(scope.get("intentionally_omitted"), list) or any(not isinstance(value, str) or not value.strip() for value in scope.get("intentionally_omitted", []))):
+        _error(errors, f"{location}.annotation_scope", "intentionally_omitted must contain non-empty dimension names")
+    overlap = legacy_annotated & legacy_omitted
+    if overlap:
+        _error(errors, f"{location}.annotation_scope", f"legacy coverage summaries conflict for dimensions: {sorted(overlap)}")
+    entries: dict[tuple[str, tuple[Any, ...]], dict[str, Any]] = {}
+    for index, entry in enumerate(dimensions):
+        entry_location = f"{location}.annotation_scope.dimensions[{index}]"
+        if not isinstance(entry, dict):
+            _error(errors, entry_location, "coverage dimension must be an object")
+            continue
+        dimension = entry.get("dimension")
+        if not _known(dimension, ANNOTATED_DIMENSIONS):
+            _error(errors, entry_location, "unknown coverage dimension")
+            continue
+        coverage_scope = entry.get("scope")
+        if not isinstance(coverage_scope, dict) or coverage_scope.get("kind") not in {"record", "node", "region"}:
+            _error(errors, entry_location, "coverage scope must identify a record, node, or region")
+        elif coverage_scope.get("kind") == "node" and not isinstance(coverage_scope.get("node"), str):
+            _error(errors, entry_location, "node coverage scope requires node")
+        elif coverage_scope.get("kind") == "region" and (not isinstance(coverage_scope.get("start"), int) or not isinstance(coverage_scope.get("end"), int) or coverage_scope["end"] <= coverage_scope["start"]):
+            _error(errors, entry_location, "region coverage scope requires a non-empty start/end")
+        if entry.get("completeness") not in {"complete", "partial", "unannotated", "omitted", "out_of_scope"}:
+            _error(errors, entry_location, "coverage completeness must be complete, partial, unannotated, omitted, or out_of_scope")
+        if entry.get("omission") not in {"none", "intentional", "not_applicable"}:
+            _error(errors, entry_location, "coverage omission must be none, intentional, or not_applicable")
+        if entry.get("omission") == "none" and entry.get("evidence") == "unannotated":
+            _error(errors, entry_location, "unannotated evidence requires omission intentional or not_applicable")
+        if entry.get("completeness") in {"unannotated", "omitted", "out_of_scope"} and entry.get("omission") == "none":
+            _error(errors, entry_location, "unannotated/omitted/out_of_scope completeness cannot use omission='none'")
+        if entry.get("completeness") == "complete" and entry.get("omission") in {"intentional", "not_applicable"}:
+            _error(errors, entry_location, "complete coverage cannot be marked intentionally omitted or not applicable")
+        if entry.get("omission") in {"intentional", "not_applicable"} and entry.get("evidence") not in {None, "unannotated"}:
+            _error(errors, entry_location, "omitted coverage must use evidence='unannotated' when evidence is declared")
+        scope_key = (dimension, _coverage_scope_key(coverage_scope))
+        if scope_key in entries:
+            previous = entries[scope_key]
+            if previous.get("completeness") != entry.get("completeness") or previous.get("omission") != entry.get("omission") or previous.get("evidence") != entry.get("evidence"):
+                _error(errors, entry_location, "same dimension + scope cannot have contradictory coverage states")
+            else:
+                _error(errors, entry_location, "duplicate dimension + scope coverage declaration")
+        entries[scope_key] = entry
+        if dimension == "dependencies" and isinstance(coverage_scope, dict) and coverage_scope.get("kind") == "record":
+            dependencies = record.get("dependencies")
+            evidence = entry.get("evidence")
+            if dependencies == [] and entry.get("omission") == "none" and evidence != "empty":
+                _error(errors, entry_location, "an annotated empty dependency list requires evidence='empty'")
+            if dependencies == [] and entry.get("omission") in {"intentional", "not_applicable"} and evidence != "unannotated":
+                _error(errors, entry_location, "an unannotated empty dependency list requires evidence='unannotated'")
+            if isinstance(dependencies, list) and dependencies and evidence == "empty":
+                _error(errors, entry_location, "evidence='empty' is only valid when dependencies is empty")
+    by_dimension: dict[str, list[dict[str, Any]]] = {}
+    for (dimension, _), entry in entries.items():
+        by_dimension.setdefault(dimension, []).append(entry)
+    for dimension, entries_for_dimension in by_dimension.items():
+        annotated = [entry for entry in entries_for_dimension if entry.get("omission") == "none"]
+        dimension_fields = {
+            "tokens": "words", "lexical_category": "words", "phrase_constituency": "constituents",
+            "constituency": "constituents", "np_internal_constituency": "constituents",
+            "clause_ontology": "clauses", "clause_structure": "clauses", "syntactic_function": "constituents",
+            "dependencies": "dependencies", "semantic_roles": "semantic_roles",
+            "lexical_valency": "lexical_valency", "vp_complementation": "constituents",
+            "framework_mapping": "framework",
+        }
+        field = dimension_fields.get(dimension)
+        if annotated and field is not None and field not in record:
+            _error(errors, f"{location}.annotation_scope", f"annotated dimension {dimension!r} requires field {field!r}")
+    if coverage == "complete_constituency":
+        required_dimensions = {"tokens", "lexical_category", "phrase_constituency", "clause_ontology", "syntactic_function"}
+        declared = {dimension for dimension, values in by_dimension.items() if any(value.get("omission") == "none" for value in values)}
+        if not required_dimensions.issubset(declared):
+            _error(errors, f"{location}.annotation_scope", "complete_constituency must annotate all core structural dimensions")
+        if any(
+            not any(
+                value.get("completeness") == "complete"
+                and value.get("omission") == "none"
+                and isinstance(value.get("scope"), dict)
+                and value["scope"].get("kind") == "record"
+                for value in by_dimension.get(dimension, [])
+            )
+            for dimension in required_dimensions
+        ):
+            _error(errors, f"{location}.annotation_scope", "complete_constituency core dimensions must be complete at record scope")
+        if not isinstance(record.get("constituents"), list) or not record["constituents"]:
+            _error(errors, f"{location}.annotation_scope", "complete_constituency requires actual constituent structure")
+
+
+def _coverage_scope_key(scope: dict[str, Any] | None) -> tuple[Any, ...]:
+    if not isinstance(scope, dict):
+        return ("invalid",)
+    kind = scope.get("kind")
+    if kind == "record":
+        return ("record",)
+    if kind == "node":
+        return ("node", scope.get("node"))
+    if kind == "region":
+        return ("region", scope.get("start"), scope.get("end"))
+    return (kind,)
+
+
+def coverage_allows_score(record: dict[str, Any], dimension: str, target: str | None = None) -> bool:
+    """Return whether a requested dimension/target is declared scorable."""
+    scope = record.get("annotation_scope", {})
+    objects: dict[str, dict[str, Any]] = {}
+    for collection in ("words", "constituents", "clauses"):
+        values = record.get(collection, [])
+        if isinstance(values, list):
+            for item in values:
+                if isinstance(item, dict) and isinstance(item.get("id"), str):
+                    objects[item["id"]] = item
+    applicable: list[tuple[int, dict[str, Any]]] = []
+    for entry in scope.get("dimensions", []) if isinstance(scope, dict) else []:
+        if not isinstance(entry, dict) or entry.get("dimension") != dimension:
+            continue
+        coverage_scope = entry.get("scope", {})
+        if not isinstance(coverage_scope, dict):
+            continue
+        kind = coverage_scope.get("kind")
+        if kind == "record":
+            if target is None:
+                applicable.append((0, entry))
+            elif target is not None:
+                applicable.append((0, entry))
+        elif kind == "node" and target is not None and coverage_scope.get("node") == target:
+            applicable.append((2, entry))
+        elif kind == "region" and target is None:
+            applicable.append((1, entry))
+        elif kind == "region" and target is not None:
+            target_span = objects.get(target, {}).get("span")
+            if (
+                isinstance(target_span, dict)
+                and isinstance(coverage_scope.get("start"), int)
+                and isinstance(coverage_scope.get("end"), int)
+                and target_span.get("start", -1) >= coverage_scope["start"]
+                and target_span.get("end", -1) <= coverage_scope["end"]
+            ):
+                applicable.append((1, entry))
+    if not applicable:
+        return False
+    _, selected = max(applicable, key=lambda item: item[0])
+    if selected.get("omission") != "none":
+        return False
+    completeness = selected.get("completeness")
+    if completeness in {"unannotated", "omitted", "out_of_scope"}:
+        return False
+    if target is None:
+        return completeness == "complete"
+    if completeness == "partial" and isinstance(selected.get("scope"), dict) and selected["scope"].get("kind") == "record":
+        return False
+    return completeness in {"complete", "partial"}
 
 
 def validate_record(record: Any, location: str, schema_path: Path | None = None) -> list[str]:
@@ -213,9 +707,24 @@ def validate_record(record: Any, location: str, schema_path: Path | None = None)
                     if not isinstance(payload, dict):
                         _error(errors, f"{location}.messages[2].content", "assistant JSON payload must be an object")
                     else:
-                        if payload.get("id") != record.get("id"):
-                            _error(errors, f"{location}.messages[2].content.id", "assistant payload id must match rendered record id")
-                        errors.extend(validate_record(payload, f"{location}.messages[2].content", schema_path))
+                        sidecar = record.get("governance_sidecar") if isinstance(record.get("governance_sidecar"), dict) else {}
+                        if sidecar.get("record_id") != record.get("id"):
+                            _error(errors, f"{location}.governance_sidecar.record_id", "governance sidecar record_id must match rendered record id")
+                        payload_id = payload.get("id")
+                        if payload_id is not None and payload_id != record.get("id"):
+                            _error(errors, f"{location}.messages[2].content.id", "assistant payload id must match rendered record id when supplied")
+                        if not isinstance(payload.get("sentence"), str):
+                            _error(errors, f"{location}.messages[2].content", "linguistic projection must include sentence")
+                        for field in ("words", "clauses", "constituents", "dependencies", "semantic_roles"):
+                            if field in payload and not isinstance(payload[field], list):
+                                _error(errors, f"{location}.messages[2].content.{field}", "projected linguistic collection must be an array when present")
+                        if sidecar.get("schema_version") != "0.4":
+                            _error(errors, f"{location}.governance_sidecar.schema_version", "rendered target must identify canonical V0.4")
+                        if any(key in payload for key in {"review_metadata", "migration_metadata", "migration_review_required", "schema_version", "split", "id"}):
+                            _error(errors, f"{location}.messages[2].content", "assistant projection contains governance-only fields")
+                        leaks = _rendered_governance_leaks(payload)
+                        if leaks:
+                            _error(errors, f"{location}.messages[2].content", f"assistant projection contains governance-only fields at {leaks}")
         return errors
     _validate_json_schema(record, location, errors, schema_path)
     missing = REQUIRED - record.keys()
@@ -226,7 +735,12 @@ def validate_record(record: Any, location: str, schema_path: Path | None = None)
     _validate_review_metadata(record, location, errors)
     version = record["schema_version"]
     if version not in SCHEMA_VERSIONS:
-        _error(errors, location, "schema_version must be '0.1' or '0.2'")
+        _error(errors, location, "schema_version must be '0.1', '0.2', or canonical '0.4'; legacy '0.3' requires explicit legacy handling")
+    if _is_v3(record):
+        _validate_coverage(record, location, errors)
+        construction_tags = record.get("construction_tags")
+        if construction_tags is not None and (not isinstance(construction_tags, list) or any(not isinstance(item, str) or not item.strip() for item in construction_tags)):
+            _error(errors, location, "construction_tags must be a list of non-empty strings")
     if not isinstance(record["id"], str) or not record["id"]:
         _error(errors, location, "id must be a non-empty string")
     if not isinstance(record["sentence"], str) or not record["sentence"].strip():
@@ -244,13 +758,12 @@ def validate_record(record: Any, location: str, schema_path: Path | None = None)
     if not isinstance(framework, dict) or not _known(framework.get("preferred"), FRAMEWORKS):
         _error(errors, location, "framework.preferred must be a known framework")
     else:
-        alternatives = framework.get("alternatives", [])
-        if not isinstance(alternatives, list):
-            _error(errors, location, "framework.alternatives must be an array")
-        else:
-            for index, item in enumerate(alternatives):
-                if not isinstance(item, dict) or not _known(item.get("framework"), FRAMEWORKS) or item.get("status") != "established" or not item.get("analysis"):
-                    _error(errors, f"{location}.framework.alternatives[{index}]", "framework alternative must name an established framework and analysis")
+        if _is_v4(record) and framework.get("preferred") != CANONICAL_FRAMEWORK:
+            _error(errors, location, "V0.4 canonical records must use framework.preferred='cgel_inspired'; alternatives need explicit attribution")
+        if _is_v4(record) and "alternatives" in framework:
+            _error(errors, f"{location}.framework.alternatives", "framework.alternatives is a legacy/non-authoritative channel; use alternative_analyses")
+    if _is_v4(record) and "framework_alternatives" in record:
+        _error(errors, f"{location}.framework_alternatives", "framework_alternatives is a legacy/non-authoritative channel; use alternative_analyses")
     if not _known(record["sentence_type"], SENTENCE_TYPES):
         _error(errors, location, f"invalid sentence_type {record['sentence_type']!r}")
     metadata = record.get("sentence_type_metadata")
@@ -270,9 +783,11 @@ def validate_record(record: Any, location: str, schema_path: Path | None = None)
         if not isinstance(word, dict):
             _error(errors, word_location, "word must be an object")
             continue
-        for field in ("id", "form", "lemma", "lexical_category"):
+        for field in ("id", "form", "lemma"):
             if not isinstance(word.get(field), str) or not word[field]:
                 _error(errors, word_location, f"{field} must be a non-empty string")
+        if "lexical_category" not in word:
+            _error(errors, word_location, "lexical_category must be present; use null with lexical_analysis when unresolved")
         if _is_v2(record) and word.get("node_kind") != "word":
             _error(errors, word_location, "V0.2 words must have node_kind='word'")
         word_id = word.get("id")
@@ -280,8 +795,36 @@ def validate_record(record: Any, location: str, schema_path: Path | None = None)
             if word_id in word_ids:
                 _error(errors, word_location, f"duplicate word id {word_id!r}")
             word_ids.add(word_id)
-        if not _known(word.get("lexical_category"), LEXICAL_CATEGORIES):
-            _error(errors, word_location, "unknown lexical_category")
+        lexical_category = word.get("lexical_category")
+        lexical_analysis = word.get("lexical_analysis")
+        if word.get("syntactic_function") == "determinative":
+            _error(errors, word_location, "determinative is a lexical category; syntactic function must be 'determiner'")
+        if lexical_category is not None and not _known(lexical_category, LEXICAL_CATEGORIES):
+            _error(errors, word_location, "unknown lexical_category; syntactic function 'determiner' is not a lexical category")
+        if lexical_category is None:
+            if not isinstance(lexical_analysis, dict) or lexical_analysis.get("status") != "unresolved":
+                _error(errors, word_location, "null lexical_category requires an unresolved lexical_analysis")
+        if isinstance(lexical_analysis, dict):
+            if lexical_analysis.get("status") != "unresolved" or lexical_analysis.get("review_required") is not True:
+                _error(errors, f"{word_location}.lexical_analysis", "unresolved lexical analyses require status='unresolved' and review_required=true")
+            if lexical_analysis.get("status") == "unresolved" and lexical_category is not None:
+                _error(errors, f"{word_location}.lexical_analysis", "unresolved lexical analyses cannot retain a canonical lexical_category")
+            candidates = lexical_analysis.get("candidates")
+            if not isinstance(candidates, list) or not candidates:
+                _error(errors, f"{word_location}.lexical_analysis", "unresolved lexical analysis requires candidate analyses")
+            else:
+                for candidate_index, candidate in enumerate(candidates):
+                    candidate_location = f"{word_location}.lexical_analysis.candidates[{candidate_index}]"
+                    candidate_category = candidate.get("category", candidate.get("lexical_category")) if isinstance(candidate, dict) else None
+                    candidate_namespace = candidate.get("category_namespace", candidate.get("framework")) if isinstance(candidate, dict) else None
+                    if not isinstance(candidate, dict) or not isinstance(candidate_category, str) or not candidate_category.strip() or not isinstance(candidate_namespace, str) or not candidate_namespace.strip():
+                        _error(errors, candidate_location, "each lexical candidate requires a non-empty category and category namespace/framework")
+                    elif candidate.get("framework") is not None and not _known(candidate.get("framework"), FRAMEWORKS):
+                        _error(errors, candidate_location, "lexical candidate framework must name a known framework when supplied")
+                    elif candidate.get("category") == "determiner" or candidate.get("lexical_category") == "determiner" or candidate.get("syntactic_function") == "determinative":
+                        _error(errors, candidate_location, "candidate must keep lexical category and syntactic function in separate fields")
+                    if isinstance(candidate, dict) and any(key in candidate for key in ("external_pos_tags", "pos", "pos_tagset")):
+                        _error(errors, candidate_location, "external_pos_tags are a separate layer and cannot be embedded in lexical candidates")
         tags_for_word = word.get("external_pos_tags")
         if tags_for_word is not None:
             if not isinstance(tags_for_word, list):
@@ -290,10 +833,14 @@ def validate_record(record: Any, location: str, schema_path: Path | None = None)
                 for tag_index, tag in enumerate(tags_for_word):
                     if not isinstance(tag, dict) or not isinstance(tag.get("tagset"), str) or not tag["tagset"] or not isinstance(tag.get("tag"), str) or not tag["tag"]:
                         _error(errors, f"{word_location}.external_pos_tags[{tag_index}]", "external POS tags require tagset and tag")
-        if _is_v2(record) and "pos" in word and "pos_tagset" not in word and not tags_for_word:
+        if _is_v3(record) and "pos" in word:
+            _error(errors, word_location, "V0.3 words must use lexical_category and external_pos_tags; legacy pos is migration-only")
+        if _is_v3(record) and "pos_tagset" in word:
+            _error(errors, word_location, "V0.3 words must use external_pos_tags; legacy pos_tagset is migration-only")
+        if (_is_v2(record) or _is_v3(record)) and "pos" in word and "pos_tagset" not in word and not tags_for_word:
             _error(errors, word_location, "legacy pos requires pos_tagset; use external_pos_tags with an explicit tagset")
-        if _is_v2(record) and "pedagogical_terms" in word:
-            _error(errors, word_location, "V0.2 pedagogical terms belong in framework-qualified pedagogical_aliases")
+        if (_is_v2(record) or _is_v3(record)) and "pedagogical_terms" in word:
+            _error(errors, word_location, "pedagogical terms belong in framework-qualified pedagogical_aliases")
 
     max_token = len(words)
     sentence_tokens, word_tokens = sentence_word_alignment(record)
@@ -317,6 +864,15 @@ def validate_record(record: Any, location: str, schema_path: Path | None = None)
     for duplicate_id in sorted(word_ids & ids):
         _error(errors, location, f"word and constituent/clause IDs must be unique; repeated {duplicate_id!r}")
     all_ids = ids | word_ids
+    if _is_v3(record) and isinstance(record.get("annotation_scope"), dict):
+        for index, entry in enumerate(record["annotation_scope"].get("dimensions", [])):
+            if not isinstance(entry, dict) or not isinstance(entry.get("scope"), dict):
+                continue
+            coverage_scope = entry["scope"]
+            if coverage_scope.get("kind") == "node" and coverage_scope.get("node") not in all_ids:
+                _error(errors, f"{location}.annotation_scope.dimensions[{index}]", "node coverage scope must reference a known node")
+            if coverage_scope.get("kind") == "region" and isinstance(coverage_scope.get("end"), int) and coverage_scope["end"] > max_token:
+                _error(errors, f"{location}.annotation_scope.dimensions[{index}]", "region coverage scope must fit within the token sequence")
     objects: dict[str, dict[str, Any]] = {}
     for word in words:
         if isinstance(word, dict) and isinstance(word.get("id"), str):
@@ -334,7 +890,7 @@ def validate_record(record: Any, location: str, schema_path: Path | None = None)
             if not isinstance(item, dict):
                 _error(errors, item_location, "item must be an object")
                 continue
-            required = ("id", "span", "function") if field_name == "constituents" else ("id", "span", "function", "finiteness")
+            required = ("id", "span", "function") if field_name == "constituents" else ("id", "span", "node_kind", "finiteness", "clause_construction", "integration")
             for field in required:
                 if field not in item:
                     _error(errors, item_location, f"missing {field}")
@@ -342,21 +898,28 @@ def validate_record(record: Any, location: str, schema_path: Path | None = None)
             if not isinstance(span, dict) or not isinstance(span.get("start"), int) or not isinstance(span.get("end"), int) or span.get("start", -1) < 0 or span.get("end", 0) <= span.get("start", 0) or span.get("end", 0) > max_token:
                 _error(errors, item_location, "span must be a valid half-open token span")
             elif isinstance(words[span["end"] - 1], dict) and words[span["end"] - 1].get("lexical_category") == "punctuation":
-                is_main_clause = field_name == "clauses" and item.get("clause_category") == "main_clause"
-                if not is_main_clause:
-                    _error(errors, item_location, "only main_clause spans may terminate at a punctuation token")
-            if not isinstance(item.get("function"), str) or not item.get("function"):
+                if _is_v3(record):
+                    _error(errors, item_location, "structural spans must exclude sentence-final punctuation")
+                else:
+                    is_main_clause = field_name == "clauses" and item.get("clause_category") == "main_clause"
+                    if not is_main_clause:
+                        _error(errors, item_location, "only main_clause spans may terminate at a punctuation token")
+            if field_name == "constituents" and (not isinstance(item.get("function"), str) or not item.get("function")):
                 _error(errors, item_location, "function must be a non-empty string")
             if field_name == "constituents":
                 constituent_category = item.get("phrase_category") or item.get("category")
-                if _is_v2(record):
+                if item.get("function") == "determinative":
+                    _error(errors, item_location, "determinative is a lexical category; syntactic function must be 'determiner'")
+                if _is_v2(record) or _is_v3(record):
                     if item.get("node_kind") not in {"phrase", "clause", "word"}:
-                        _error(errors, item_location, "V0.2 constituents require node_kind phrase, clause, or word")
+                        _error(errors, item_location, "V0.3/V0.2 constituents require node_kind phrase, clause, or word")
                     if item.get("node_kind") == "phrase":
                         if not _known(item.get("phrase_category"), PHRASE_CATEGORIES):
                             _error(errors, item_location, "phrase nodes require a valid phrase category in phrase_category; Clause is not a phrase category")
                         if item.get("phrase_category") == "word":
                             _error(errors, item_location, "word category requires node_kind='word', not a phrase node")
+                        if "clause_ref" in item:
+                            _error(errors, item_location, "clause_ref is reserved for node_kind='clause' wrappers")
                         if "category" in item:
                             _error(errors, item_location, "V0.2 phrase nodes must use phrase_category; category is a V0.1 compatibility field")
                     elif item.get("node_kind") == "clause":
@@ -368,21 +931,71 @@ def validate_record(record: Any, location: str, schema_path: Path | None = None)
                             _error(errors, item_location, "clause node must reference a known clause with clause_ref")
                         if item.get("phrase_category") is not None or item.get("category") is not None:
                             _error(errors, item_location, "clause nodes must use clause_ref, not phrase/category")
+                        realization = item.get("realization")
+                        if not isinstance(realization, dict):
+                            _error(errors, item_location, "clause-valued constituents require an explicit realization relation")
+                        else:
+                            if realization.get("clause_ref") != item.get("clause_ref"):
+                                _error(errors, item_location, "realization.clause_ref must agree with clause_ref")
+                            if realization.get("relation") not in {"same_span_alias", "expanded_realization", "other"}:
+                                _error(errors, item_location, "realization relation is invalid")
+                            elif isinstance(span, dict) and isinstance(objects.get(item.get("clause_ref")), dict):
+                                clause_span = objects[item["clause_ref"]].get("span", {})
+                                if isinstance(clause_span, dict) and realization.get("relation") == "same_span_alias" and span != clause_span:
+                                    _error(errors, item_location, "same_span_alias requires wrapper and clause spans to match")
+                                if isinstance(clause_span, dict) and realization.get("relation") == "expanded_realization" and not (span.get("start", 0) <= clause_span.get("start", 0) and span.get("end", 0) >= clause_span.get("end", 0)):
+                                    _error(errors, item_location, "expanded_realization wrapper must contain the clause span")
+                        if "span_relation" in item and item.get("span_relation") != (realization or {}).get("relation"):
+                            _error(errors, item_location, "span_relation must agree with realization.relation")
                     elif item.get("node_kind") == "word" and any(key in item for key in ("phrase_category", "category", "clause_ref")):
                         _error(errors, item_location, "word nodes must use the words collection, not phrase/clause category fields")
                 elif not _known(item.get("category"), PHRASE_CATEGORIES | {"Clause"}):
                     _error(errors, item_location, "unknown phrase category")
                 if constituent_category == "PP" and item.get("function") == "AdvP":
                     _error(errors, item_location, "PP is a phrase category; AdvP is not a syntactic function")
-                if _is_v2(record) and "role" in item:
-                    _error(errors, item_location, "V0.2 semantic roles belong in semantic_roles, not constituent.role")
+                if (_is_v2(record) or _is_v3(record)) and "role" in item:
+                    _error(errors, item_location, "semantic roles belong in semantic_roles, not constituent.role")
                 if "head" in item and item.get("head") is not None:
                     _require_ref_kind(item.get("head"), objects, {"word"}, f"{item_location}.head", errors, "constituent.head")
                 if "parent" in item and item.get("parent") is not None:
                     _require_ref_kind(item.get("parent"), objects, {"phrase", "clause"}, f"{item_location}.parent", errors, "constituent.parent")
             else:
                 category = item.get("clause_category") or item.get("category")
-                if _is_v2(record):
+                if _is_v3(record):
+                    if item.get("node_kind") != "clause":
+                        _error(errors, item_location, "V0.3 clause entries require node_kind='clause'")
+                    if any(key in item for key in ("clause_category", "category", "clause_type", "clause_status")):
+                        _error(errors, item_location, "V0.3 clauses must use clause_construction and integration; legacy clause fields are rejected")
+                    if "function" in item:
+                        _error(errors, item_location, "clause function is not authoritative; put external function on a clause-valued constituent")
+                    if not _known(item.get("clause_construction"), CLAUSE_CONSTRUCTIONS):
+                        _error(errors, item_location, "clause_construction must be a known construction value")
+                    integration = item.get("integration")
+                    if not isinstance(integration, list) or not integration or any(not _known(value, CLAUSE_INTEGRATIONS) for value in integration) or len(integration) != len(set(integration or [])):
+                        _error(errors, item_location, "integration must be a non-empty unique list of known relations")
+                    elif "root" in integration and len(integration) != 1:
+                        _error(errors, item_location, "root integration cannot mix unresolved or another integration relation")
+                    elif "unresolved" in integration and len(integration) != 1:
+                        _error(errors, item_location, "integration cannot mix unresolved with a resolved relation")
+                    if not _known(item.get("finiteness"), CLAUSE_FINITE_VALUES):
+                        _error(errors, item_location, "finiteness must be finite, nonfinite, verbless, or unspecified")
+                    clause_form = item.get("clause_form")
+                    if item.get("finiteness") == "nonfinite" and not _known(clause_form, CLAUSE_FORMS):
+                        _error(errors, item_location, "nonfinite clauses require a known clause_form")
+                    if item.get("finiteness") != "nonfinite" and clause_form is not None:
+                        _error(errors, item_location, "clause_form is only permitted for nonfinite clauses")
+                    marker_ids = item.get("marker_ids", [])
+                    if not isinstance(marker_ids, list) or any(not isinstance(marker, str) or marker not in all_ids for marker in marker_ids):
+                        _error(errors, f"{item_location}.marker_ids", "marker_ids must reference known IDs")
+                    else:
+                        for marker in marker_ids:
+                            if _ref_kind(marker, objects) != "word":
+                                _error(errors, f"{item_location}.marker_ids", "marker_ids must reference words")
+                            elif isinstance(span, dict) and isinstance(span.get("start"), int) and isinstance(span.get("end"), int):
+                                marker_index = next((position for position, word in enumerate(words) if isinstance(word, dict) and word.get("id") == marker), None)
+                                if marker_index is not None and not (span["start"] <= marker_index < span["end"]):
+                                    _error(errors, f"{item_location}.marker_ids", "clause marker must lie inside clause span")
+                elif _is_v2(record):
                     if item.get("node_kind") != "clause":
                         _error(errors, item_location, "V0.2 clause entries require node_kind='clause'")
                     if not _known(item.get("clause_category"), CLAUSE_CATEGORIES):
@@ -391,13 +1004,20 @@ def validate_record(record: Any, location: str, schema_path: Path | None = None)
                         _error(errors, item_location, "V0.2 clauses must use clause_category; category is a V0.1 compatibility field")
                 elif not _known(category, CLAUSE_CATEGORIES):
                     _error(errors, item_location, "unknown clause category")
-                if not _known(item.get("finiteness"), {"finite", "non-finite"}):
-                    _error(errors, item_location, "finiteness must be finite or non-finite")
-                if item.get("finiteness") == "finite" and isinstance(category, str) and category in {"nonfinite_clause", "gerund_participial_clause", "infinitival_clause"}:
-                    _error(errors, item_location, "non-finite clause category cannot be marked finite")
+                if not _is_v3(record):
+                    if not _known(item.get("finiteness"), {"finite", "non-finite"}):
+                        _error(errors, item_location, "finiteness must be finite or non-finite")
+                    if item.get("finiteness") == "finite" and isinstance(category, str) and category in {"nonfinite_clause", "gerund_participial_clause", "infinitival_clause"}:
+                        _error(errors, item_location, "non-finite clause category cannot be marked finite")
                 for ref_field in ("subject", "head"):
                     if ref_field in item and not _valid_ref(item.get(ref_field), all_ids):
                         _error(errors, item_location, f"{ref_field} must reference a known ID")
+                if "integration_parent" in item and item.get("integration_parent") is not None:
+                    parent = item.get("integration_parent")
+                    if not isinstance(parent, str) or parent not in {clause.get("id") for clause in clause_items if isinstance(clause, dict)}:
+                        _error(errors, f"{item_location}.integration_parent", "integration_parent must reference a known clause ID")
+                    elif _ref_kind(parent, objects) != "clause":
+                        _error(errors, f"{item_location}.integration_parent", "integration_parent must reference a clause, not another node kind")
                 if item.get("subject") is not None:
                     subject_id = item.get("subject")
                     subject_kind = _ref_kind(subject_id, objects)
@@ -409,6 +1029,186 @@ def validate_record(record: Any, location: str, schema_path: Path | None = None)
                     elif subject_kind == "phrase" and subject_object.get("phrase_category") != "NP":
                         _error(errors, f"{item_location}.subject", "clause.subject phrase reference must be an NP")
                 _validate_predicand(item.get("predicand"), f"{item_location}.predicand", all_ids, objects, version, errors)
+
+    if _is_v4(record) and isinstance(record.get("constituents"), list):
+        realization_groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+        for constituent in record["constituents"]:
+            if not isinstance(constituent, dict) or constituent.get("node_kind") != "clause":
+                continue
+            clause_ref = constituent.get("clause_ref")
+            span = constituent.get("span")
+            if isinstance(clause_ref, str) and isinstance(span, dict) and isinstance(span.get("start"), int) and isinstance(span.get("end"), int):
+                realization = constituent.get("realization") if isinstance(constituent.get("realization"), dict) else {}
+                context = realization.get("context") if isinstance(realization.get("context"), str) else ""
+                layer = realization.get("layer") if isinstance(realization.get("layer"), str) else ""
+                realization_groups.setdefault((clause_ref, context, layer), []).append(constituent)
+
+        def wrapper_authority(wrappers: list[dict[str, Any]]) -> bool:
+            relevant_wrapper_ids = {
+                wrapper.get("id") for wrapper in wrappers
+                if isinstance(wrapper.get("id"), str)
+            }
+            relevant_clause_refs = {
+                wrapper.get("clause_ref") for wrapper in wrappers
+                if isinstance(wrapper.get("clause_ref"), str)
+            }
+            alternative_values = record.get("alternative_analyses", [])
+            if not isinstance(alternative_values, list):
+                alternative_values = []
+            alternatives_by_id = {
+                item.get("id"): item for item in alternative_values
+                if isinstance(item, dict) and isinstance(item.get("id"), str)
+            }
+            relation_nodes: dict[str, set[str]] = {}
+            analyses_for_relations = []
+            for field in ("canonical_analysis", "preferred_analysis"):
+                if isinstance(record.get(field), dict):
+                    analyses_for_relations.append(record[field])
+            analyses_for_relations.extend(value for value in alternatives_by_id.values())
+            for analysis in analyses_for_relations:
+                typed = analysis.get("typed_analysis") if isinstance(analysis, dict) else None
+                for relation in typed.get("relations", []) if isinstance(typed, dict) and isinstance(typed.get("relations"), list) else []:
+                    if not isinstance(relation, dict) or not isinstance(relation.get("id"), str):
+                        continue
+                    nodes = {
+                        identifier for identifier in (
+                            _typed_reference_identifier(relation.get("source")),
+                            _typed_reference_identifier(relation.get("target")),
+                        ) if isinstance(identifier, str)
+                    }
+                    relation_nodes[relation["id"]] = nodes
+
+            established_nodes: set[str] = set()
+            established_relation_nodes: set[str] = set()
+
+            def string_ids(values: Any) -> set[str]:
+                if not isinstance(values, list):
+                    return set()
+                return {value for value in values if isinstance(value, str)}
+
+            def linked_relation_nodes(relation_ids: Any) -> set[str]:
+                nodes: set[str] = set()
+                for relation_id in string_ids(relation_ids):
+                    nodes.update(relation_nodes.get(relation_id, set()))
+                return nodes
+
+            for alternative in alternatives_by_id.values():
+                if alternative.get("status") != "established":
+                    continue
+                linked_relation_ids = string_ids(alternative.get("linked_relation_ids"))
+                established_nodes.update(_linked_ids(alternative, ALTERNATIVE_LINK_FIELDS) - linked_relation_ids)
+                established_relation_nodes.update(linked_relation_nodes(alternative.get("linked_relation_ids")))
+            ambiguity = record.get("ambiguity")
+            relevant_ambiguity_analyses = 0
+            ambiguity_nodes: set[str] = set()
+            ambiguity_relation_nodes: set[str] = set()
+            if (
+                isinstance(ambiguity, dict)
+                and ambiguity.get("status") in {"genuinely_ambiguous", "multiple_established_analyses_with_preferred_reading"}
+                and isinstance(ambiguity.get("analyses"), list)
+            ):
+                for analysis in ambiguity["analyses"]:
+                    if not isinstance(analysis, dict):
+                        continue
+                    relation_ids = string_ids(analysis.get("relation_ids"))
+                    alternative_ids = analysis.get("alternative_ids")
+                    alternative_id_values = string_ids(alternative_ids)
+                    analysis_nodes = _linked_ids(analysis, AMBIGUITY_LINK_FIELDS) - relation_ids - alternative_id_values
+                    analysis_relation_nodes: set[str] = set()
+                    for relation_id in relation_ids:
+                        if isinstance(relation_id, str):
+                            analysis_relation_nodes.update(relation_nodes.get(relation_id, set()))
+                    if isinstance(alternative_ids, list):
+                        for alternative_id in alternative_ids:
+                            alternative = alternatives_by_id.get(alternative_id)
+                            if not isinstance(alternative, dict) or alternative.get("status") != "established":
+                                continue
+                            linked_relation_ids = string_ids(alternative.get("linked_relation_ids"))
+                            analysis_nodes.update(_linked_ids(alternative, ALTERNATIVE_LINK_FIELDS) - linked_relation_ids)
+                            for relation_id in linked_relation_ids:
+                                if isinstance(relation_id, str):
+                                    analysis_relation_nodes.update(relation_nodes.get(relation_id, set()))
+                    if (
+                        bool(relevant_clause_refs & analysis_nodes)
+                        or bool(relevant_wrapper_ids & analysis_nodes)
+                        or bool(relevant_clause_refs & analysis_relation_nodes)
+                        or bool(relevant_wrapper_ids & analysis_relation_nodes)
+                    ):
+                        relevant_ambiguity_analyses += 1
+                    ambiguity_nodes.update(analysis_nodes)
+                    ambiguity_relation_nodes.update(analysis_relation_nodes)
+            ambiguity_authorizes = relevant_ambiguity_analyses >= 2 and (
+                bool(relevant_clause_refs & ambiguity_nodes)
+                or relevant_wrapper_ids.issubset(ambiguity_nodes)
+                or bool(relevant_clause_refs & ambiguity_relation_nodes)
+                or relevant_wrapper_ids.issubset(ambiguity_relation_nodes)
+            )
+            established_alternative_authorizes = (
+                bool(relevant_clause_refs & established_nodes)
+                or relevant_wrapper_ids.issubset(established_nodes)
+                or bool(relevant_clause_refs & established_relation_nodes)
+                or relevant_wrapper_ids.issubset(established_relation_nodes)
+            )
+            return (
+                established_alternative_authorizes
+                or ambiguity_authorizes
+            )
+
+        for key, wrappers in realization_groups.items():
+            if len(wrappers) <= 1 or wrapper_authority(wrappers):
+                continue
+            spans = {
+                (wrapper.get("span", {}).get("start"), wrapper.get("span", {}).get("end"))
+                for wrapper in wrappers if isinstance(wrapper.get("span"), dict)
+            }
+            functions = {wrapper.get("function") for wrapper in wrappers}
+            if len(spans) > 1:
+                _error(errors, location, f"clause realization {key!r} has incompatible unlinked multi-span wrappers")
+            elif len(functions) > 1:
+                _error(errors, location, f"clause realization {key!r} has conflicting canonical wrapper functions; link an explicit ambiguity or established alternative")
+            else:
+                _error(errors, location, f"clause realization {key!r} has duplicate canonical wrappers")
+        scope_entries = record.get("annotation_scope", {}).get("dimensions", []) if isinstance(record.get("annotation_scope"), dict) else []
+        wrapped_clause_ids = {
+            item.get("clause_ref") for item in record["constituents"]
+            if isinstance(item, dict) and item.get("node_kind") == "clause" and isinstance(item.get("clause_ref"), str)
+        }
+        for clause in record.get("clauses", []):
+            if not isinstance(clause, dict) or "root" in (clause.get("integration") or []) or clause.get("id") in wrapped_clause_ids:
+                continue
+            clause_span = clause.get("span") if isinstance(clause.get("span"), dict) else {}
+            function_coverage_applies = False
+            for entry in scope_entries:
+                if not isinstance(entry, dict) or entry.get("dimension") != "syntactic_function" or entry.get("omission") != "none" or entry.get("completeness") != "complete":
+                    continue
+                coverage_scope = entry.get("scope") if isinstance(entry.get("scope"), dict) else {}
+                if coverage_scope.get("kind") == "record":
+                    function_coverage_applies = True
+                elif coverage_scope.get("kind") == "node" and coverage_scope.get("node") == clause.get("id"):
+                    function_coverage_applies = True
+                elif (
+                    coverage_scope.get("kind") == "region"
+                    and isinstance(clause_span.get("start"), int)
+                    and isinstance(clause_span.get("end"), int)
+                    and isinstance(coverage_scope.get("start"), int)
+                    and isinstance(coverage_scope.get("end"), int)
+                    and coverage_scope["start"] <= clause_span["start"]
+                    and clause_span["end"] <= coverage_scope["end"]
+                ):
+                    function_coverage_applies = True
+                if function_coverage_applies:
+                    break
+            if function_coverage_applies:
+                _error(errors, location, f"complete syntactic-function coverage requires an external realization wrapper for clause {clause.get('id')!r}")
+
+    if _is_v3(record) and isinstance(record.get("clauses"), list):
+        root_clauses = [item for item in record["clauses"] if isinstance(item, dict) and isinstance(item.get("integration"), list) and "root" in item.get("integration", [])]
+        if len(root_clauses) != 1:
+            _error(errors, location, "V0.4 records must contain exactly one root clause")
+        elif _is_v4(record):
+            root_construction = root_clauses[0].get("clause_construction")
+            if root_construction in {"declarative", "interrogative", "exclamative"} and record.get("sentence_type") != root_construction:
+                _error(errors, location, "sentence_type is derived from the root clause and cannot contradict its construction")
 
     dependencies = record["dependencies"] if isinstance(record["dependencies"], list) else []
     if not isinstance(record["dependencies"], list):
@@ -458,23 +1258,94 @@ def validate_record(record: Any, location: str, schema_path: Path | None = None)
                     _error(errors, f"{valency_location}.selected_complements[{selected_index}]", "selected complement must reference a phrase or clause, not a word")
 
     analyses = []
+    typed_relation_ids: set[str] = set()
+
+    def merge_typed_relation_ids(relation_ids: set[str], relation_location: str) -> None:
+        overlap = typed_relation_ids & relation_ids
+        if overlap:
+            _error(errors, relation_location, f"typed relation IDs must be unique within the record; repeated {sorted(overlap)}")
+        typed_relation_ids.update(relation_ids)
+
     if "canonical_analysis" in record:
         _validate_analysis(record["canonical_analysis"], f"{location}.canonical_analysis", errors)
         analyses.append(record["canonical_analysis"])
+        if isinstance(record["canonical_analysis"], dict):
+            merge_typed_relation_ids(_validate_typed_analysis(
+                record["canonical_analysis"].get("typed_analysis"),
+                f"{location}.canonical_analysis.typed_analysis",
+                record,
+                errors,
+                preferred_authority=True,
+            ), f"{location}.canonical_analysis.typed_analysis")
     if "preferred_analysis" in record:
         _validate_analysis(record["preferred_analysis"], f"{location}.preferred_analysis", errors)
         analyses.append(record["preferred_analysis"])
+        if isinstance(record["preferred_analysis"], dict):
+            merge_typed_relation_ids(_validate_typed_analysis(
+                record["preferred_analysis"].get("typed_analysis"),
+                f"{location}.preferred_analysis.typed_analysis",
+                record,
+                errors,
+                preferred_authority=True,
+            ), f"{location}.preferred_analysis.typed_analysis")
+        if _is_v3(record):
+            _error(errors, location, "V0.4 records must use canonical_analysis; preferred_analysis is migration-only")
     if not analyses:
         _error(errors, location, "record requires canonical_analysis or preferred_analysis")
     if len(analyses) == 2 and analyses[0] != analyses[1]:
         _error(errors, location, "canonical_analysis and preferred_analysis disagree; keep one source of truth")
-    for field_name in ("framework_alternatives", "alternative_analyses"):
-        values = record.get(field_name, [])
-        if not isinstance(values, list):
-            _error(errors, location, f"{field_name} must be an array")
-        else:
-            for index, item in enumerate(values):
-                _validate_analysis(item, f"{location}.{field_name}[{index}]", errors, alternative=True)
+    alternative_ids: set[str] = set()
+    alternative_keys: set[str] = set()
+    alternatives = record.get("alternative_analyses", [])
+    if not isinstance(alternatives, list):
+        _error(errors, location, "alternative_analyses must be an array")
+        alternatives = []
+    clause_ids = {
+        clause.get("id") for clause in clause_items
+        if isinstance(clause, dict) and isinstance(clause.get("id"), str)
+    }
+    wrapper_ids = {
+        item.get("id") for item in constituent_items
+        if isinstance(item, dict) and item.get("node_kind") == "clause" and isinstance(item.get("id"), str)
+    }
+    for index, item in enumerate(alternatives):
+        alternative_location = f"{location}.alternative_analyses[{index}]"
+        _validate_analysis(item, alternative_location, errors, alternative=True)
+        if not isinstance(item, dict):
+            continue
+        alternative_id = item.get("id")
+        if isinstance(alternative_id, str):
+            if alternative_id in alternative_ids:
+                _error(errors, alternative_location, f"duplicate alternative id {alternative_id!r}")
+            alternative_ids.add(alternative_id)
+        alternative_key = _authoritative_alternative_key(item)
+        if alternative_key in alternative_keys:
+            _error(errors, alternative_location, "duplicate equivalent authoritative alternative")
+        alternative_keys.add(alternative_key)
+        merge_typed_relation_ids(_validate_typed_analysis(
+            item.get("typed_analysis"),
+            f"{alternative_location}.typed_analysis",
+            record,
+            errors,
+            preferred_authority=False,
+        ), f"{alternative_location}.typed_analysis")
+        for field in ALTERNATIVE_LINK_FIELDS:
+            values = item.get(field)
+            if values is None:
+                continue
+            if not isinstance(values, list) or any(not isinstance(value, str) or not value for value in values):
+                _error(errors, f"{alternative_location}.{field}", "alternative linkage must be a list of non-empty IDs")
+                continue
+            if field == "linked_wrapper_ids":
+                unknown = set(values) - wrapper_ids
+            elif field == "linked_constituent_ids":
+                unknown = set(values) - ids
+            elif field == "linked_clause_refs":
+                unknown = set(values) - clause_ids
+            else:
+                unknown = set(values) - typed_relation_ids
+            if unknown:
+                _error(errors, f"{alternative_location}.{field}", f"alternative linkage references unknown IDs: {sorted(unknown)}")
     aliases = record.get("pedagogical_aliases")
     if aliases is not None:
         if not isinstance(aliases, list):
@@ -495,9 +1366,6 @@ def validate_record(record: Any, location: str, schema_path: Path | None = None)
         elif isinstance(role_item.get("predicate"), str) and role_item.get("predicate") in all_ids:
             predicate_id = role_item.get("predicate")
             _require_ref_kind(predicate_id, objects, {"word"}, f"{location}.semantic_roles[{index}].predicate", errors, "semantic role predicate")
-            predicate_object = objects.get(predicate_id, {})
-            if predicate_object.get("lexical_category") not in {"verb", "auxiliary", "modal"}:
-                _error(errors, f"{location}.semantic_roles[{index}].predicate", "semantic role predicate word must be verbal")
 
     fusion_items = record.get("fusion_relations", [])
     if fusion_items is not None:
@@ -545,18 +1413,54 @@ def validate_record(record: Any, location: str, schema_path: Path | None = None)
             ambiguity_analyses = ambiguity["analyses"]
             if status == "genuinely_ambiguous" and len(ambiguity_analyses) < 2:
                 _error(errors, location, "genuinely_ambiguous requires at least two structural analyses")
-            if status == "unambiguous" and len(ambiguity_analyses) > 1:
-                _error(errors, location, "unambiguous records cannot list competing analyses")
+            if status == "unambiguous" and len(ambiguity_analyses) != 1:
+                _error(errors, location, "unambiguous records require exactly one analysis")
             preferred_id = ambiguity.get("preferred_analysis")
             ambiguity_ids = {
                 item.get("id") for item in ambiguity_analyses
                 if isinstance(item, dict) and isinstance(item.get("id"), str)
             }
+            alternatives_by_id = {
+                item.get("id"): item for item in alternatives
+                if isinstance(item, dict) and isinstance(item.get("id"), str)
+            }
+            if len(ambiguity_ids) != len(ambiguity_analyses):
+                _error(errors, f"{location}.ambiguity", "ambiguity analysis IDs must be unique and non-empty")
             if status == "multiple_established_analyses_with_preferred_reading" and (len(ambiguity_analyses) < 2 or not isinstance(preferred_id, str) or preferred_id not in ambiguity_ids):
                 _error(errors, location, "multiple established analyses require two analyses and a preferred_analysis id")
             for index, item in enumerate(ambiguity_analyses):
-                if not isinstance(item, dict) or not item.get("id") or not isinstance(item.get("structural_claims"), list) or not item.get("interpretation"):
+                if not isinstance(item, dict) or not item.get("id") or not isinstance(item.get("structural_claims"), list) or any(not isinstance(claim, str) or not claim for claim in item.get("structural_claims", [])) or not item.get("interpretation"):
                     _error(errors, f"{location}.ambiguity.analyses[{index}]", "ambiguity analysis requires id, structural_claims, and interpretation")
+                if isinstance(item, dict):
+                    if not _linked_ids(item, AMBIGUITY_LINK_FIELDS):
+                        _error(errors, f"{location}.ambiguity.analyses[{index}]", "ambiguity analysis must link an alternative or structured wrapper/constituent/clause/relation")
+                    for field in AMBIGUITY_LINK_FIELDS:
+                        values = item.get(field)
+                        if values is None:
+                            continue
+                        if not isinstance(values, list) or any(not isinstance(value, str) or not value for value in values):
+                            _error(errors, f"{location}.ambiguity.analyses[{index}].{field}", "ambiguity linkage must be a list of non-empty IDs")
+                            continue
+                        if field == "alternative_ids":
+                            unknown = set(values) - alternative_ids
+                        elif field == "wrapper_ids":
+                            unknown = set(values) - wrapper_ids
+                        elif field == "relation_ids":
+                            unknown = set(values) - typed_relation_ids
+                        elif field == "constituent_ids":
+                            unknown = set(values) - ids
+                        else:
+                            unknown = set(values) - clause_ids
+                        if unknown:
+                            _error(errors, f"{location}.ambiguity.analyses[{index}].{field}", f"ambiguity linkage references unknown IDs: {sorted(unknown)}")
+                        if field == "alternative_ids" and status == "multiple_established_analyses_with_preferred_reading":
+                            non_established = {
+                                alternative_id for alternative_id in values
+                                if isinstance(alternatives_by_id.get(alternative_id), dict)
+                                and alternatives_by_id[alternative_id].get("status") != "established"
+                            }
+                            if non_established:
+                                _error(errors, f"{location}.ambiguity.analyses[{index}].alternative_ids", "multiple_established_analyses_with_preferred_reading requires established alternatives")
                 if "attachment" in item and item.get("attachment") is not None:
                     attachment = item.get("attachment")
                     if not isinstance(attachment, str) or attachment not in all_ids:
@@ -661,8 +1565,8 @@ def validate_files(paths: list[Path], benchmark_path: Path | None = None, schema
             metadata = benchmark_record.get("review_metadata")
             if not isinstance(metadata, dict):
                 errors.append(f"{benchmark_path}:{benchmark_line} record {benchmark_record.get('id')!r}: benchmark records require review_metadata")
-            elif metadata.get("review_status") == "canonical_gold":
-                errors.append(f"{benchmark_path}:{benchmark_line} record {benchmark_record.get('id')!r}: benchmark cannot claim canonical_gold before independent linguistic review")
+            elif metadata.get("review_status") in {"approved_for_training", "canonical_gold"}:
+                errors.append(f"{benchmark_path}:{benchmark_line} record {benchmark_record.get('id')!r}: benchmark records are evaluation-only and cannot claim training approval")
         benchmark_seen_ids: dict[str, int] = {}
         benchmark_seen_sentences: dict[str, int] = {}
         for benchmark_line, benchmark_record in benchmark_rows:
@@ -710,7 +1614,7 @@ def main() -> int:
     try:
         with arguments.schema.open(encoding="utf-8") as schema_handle:
             schema_document = json.load(schema_handle)
-        if schema_document.get("$id") != "https://english-syntax-tutor.local/schema/gold-annotation-0.2.json":
+        if schema_document.get("$id") != "https://english-syntax-tutor.local/schema/gold-annotation-0.4.json":
             raise ValueError("unexpected gold schema $id")
     except (OSError, json.JSONDecodeError, ValueError, AttributeError) as error:
         print(f"Schema check failed: {error}", file=sys.stderr)

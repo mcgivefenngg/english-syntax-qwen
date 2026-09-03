@@ -10,6 +10,7 @@ from pathlib import Path
 
 from scripts.check_contamination import check_contamination, compare
 from scripts.data_common import read_jsonl
+from scripts.migrate_v021 import migrate
 from scripts.render_sft import render_assistant, render_record
 from scripts.validate_dataset import validate_record, validate_files
 
@@ -20,6 +21,68 @@ GOLD = ROOT / "data" / "gold" / "fixtures.jsonl"
 
 
 class DataPipelineTests(unittest.TestCase):
+    def test_v03_clause_dimensions_are_orthogonal_and_composable(self) -> None:
+        records = {record["id"]: record for _, record in read_jsonl(BENCHMARK)}
+        relative = records["legacy-05-relative-approaching"]["clauses"][1]
+        self.assertEqual((relative["finiteness"], relative["clause_construction"]), ("finite", "other"))
+        infinitival = copy.deepcopy(records["new-17-purpose-infinitive"])
+        infinitival["clauses"][1]["clause_construction"] = "interrogative"
+        infinitival["clauses"][1]["integration"] = ["subordinate"]
+        self.assertEqual(validate_record(infinitival, "orthogonal"), [])
+        supplementary_relative = copy.deepcopy(records["legacy-05-relative-approaching"])
+        supplementary_relative["clauses"][1]["integration"] = ["supplementary"]
+        self.assertEqual(validate_record(supplementary_relative, "supplementary-relative"), [])
+        supplementary = records["new-18-perfect-gerund"]["clauses"][1]
+        self.assertEqual((supplementary["finiteness"], supplementary["clause_form"], supplementary["integration"]), ("nonfinite", "gerund_participial", ["subordinate"]))
+
+    def test_v03_clause_is_not_phrase_and_legacy_enum_is_rejected(self) -> None:
+        record = copy.deepcopy(read_jsonl(GOLD)[0][1])
+        record["clauses"][0]["clause_category"] = "main_clause"
+        self.assertTrue(any("legacy clause" in error for error in validate_record(record, "legacy-clause")))
+        record = copy.deepcopy(read_jsonl(GOLD)[0][1])
+        record["constituents"][0]["node_kind"] = "phrase"
+        record["constituents"][0]["phrase_category"] = "Clause"
+        self.assertTrue(any("phrase category" in error for error in validate_record(record, "clause-phrase")))
+
+    def test_v03_partial_coverage_and_capability_semantics(self) -> None:
+        record = copy.deepcopy(read_jsonl(GOLD)[0][1])
+        record["capability_tags"].append("fused_relative")
+        self.assertEqual(validate_record(record, "capability-only"), [])
+        record.pop("annotation_scope")
+        self.assertTrue(any("annotation_scope" in error for error in validate_record(record, "missing-coverage")))
+
+    def test_v03_marker_and_terminal_punctuation_conventions(self) -> None:
+        record = copy.deepcopy(next(value for _, value in read_jsonl(BENCHMARK) if value["id"] == "new-46-finite-content-clause"))
+        record["clauses"][1]["span"] = {"start": 4, "end": 6}
+        self.assertTrue(any("marker must lie inside clause span" in error for error in validate_record(record, "marker-span")))
+        record = copy.deepcopy(read_jsonl(GOLD)[0][1])
+        record["clauses"][0]["span"]["end"] = len(record["words"])
+        self.assertTrue(any("sentence-final punctuation" in error for error in validate_record(record, "root-punctuation")))
+
+    def test_v03_framework_attribution_and_migration(self) -> None:
+        record = copy.deepcopy(read_jsonl(GOLD)[0][1])
+        record["framework"]["preferred"] = "UD"
+        self.assertTrue(any("framework.preferred" in error for error in validate_record(record, "noncanonical-framework")))
+        record["framework"]["preferred"] = "cgel_inspired"
+        record["canonical_analysis"]["framework"] = "not-a-framework"
+        self.assertTrue(any("framework attribution" in error for error in validate_record(record, "bad-framework")))
+        record["canonical_analysis"].pop("framework")
+        record["canonical_analysis"]["analysis_type"] = "small_clause"
+        record["canonical_analysis"].pop("typed_analysis")
+        self.assertTrue(any("typed_analysis" in error for error in validate_record(record, "unattributed-analysis")))
+        record["canonical_analysis"].pop("analysis_type")
+        legacy = copy.deepcopy(record)
+        legacy["schema_version"] = "0.2"
+        legacy["clauses"][0].pop("integration")
+        legacy["clauses"][0].pop("clause_construction")
+        legacy["clauses"][0]["clause_category"] = "main_clause"
+        migrate(legacy)
+        self.assertEqual(legacy["schema_version"], "0.4")
+        self.assertEqual(legacy["clauses"][0]["clause_construction"], "unresolved")
+        self.assertEqual(validate_record(legacy, "migrated"), [])
+        migrated_once = copy.deepcopy(legacy)
+        migrate(legacy)
+        self.assertEqual(legacy, migrated_once)
     def test_gold_fixture_schema_validation(self) -> None:
         records = read_jsonl(GOLD)
         self.assertEqual(len(records), 2)
@@ -46,7 +109,7 @@ class DataPipelineTests(unittest.TestCase):
         self.assertTrue(any("half-open token span" in error for error in validate_record(record, "span")))
         record = copy.deepcopy(read_jsonl(GOLD)[0][1])
         record["constituents"][0]["span"] = {"start": 0, "end": 6}
-        self.assertTrue(any("only main_clause spans" in error for error in validate_record(record, "punctuation-span")))
+        self.assertTrue(any("structural spans must exclude sentence-final punctuation" in error for error in validate_record(record, "punctuation-span")))
 
     def test_validator_rejects_category_function_confusion(self) -> None:
         record = copy.deepcopy(read_jsonl(GOLD)[0][1])
@@ -68,15 +131,15 @@ class DataPipelineTests(unittest.TestCase):
             {"id": "w0", "form": "To", "lemma": "to", "node_kind": "word", "lexical_category": "subordinator", "external_pos_tags": [{"tagset": "UD_UPOS", "tag": "PART"}]},
             {"id": "w1", "form": "leave", "lemma": "leave", "node_kind": "word", "lexical_category": "verb", "external_pos_tags": [{"tagset": "PTB", "tag": "VB"}]},
             {"id": "w2", "form": ",", "lemma": ",", "node_kind": "word", "lexical_category": "punctuation", "external_pos_tags": [{"tagset": "PTB", "tag": ","}]},
-            {"id": "w3", "form": "the", "lemma": "the", "node_kind": "word", "lexical_category": "determiner", "external_pos_tags": [{"tagset": "PTB", "tag": "DT"}]},
+            {"id": "w3", "form": "the", "lemma": "the", "node_kind": "word", "lexical_category": "determinative", "external_pos_tags": [{"tagset": "PTB", "tag": "DT"}]},
             {"id": "w4", "form": "archivist", "lemma": "archivist", "node_kind": "word", "lexical_category": "noun", "external_pos_tags": [{"tagset": "PTB", "tag": "NN"}]},
             {"id": "w5", "form": "catalogued", "lemma": "catalogue", "node_kind": "word", "lexical_category": "verb", "external_pos_tags": [{"tagset": "PTB", "tag": "VBD"}]},
-            {"id": "w6", "form": "the", "lemma": "the", "node_kind": "word", "lexical_category": "determiner", "external_pos_tags": [{"tagset": "PTB", "tag": "DT"}]},
+            {"id": "w6", "form": "the", "lemma": "the", "node_kind": "word", "lexical_category": "determinative", "external_pos_tags": [{"tagset": "PTB", "tag": "DT"}]},
             {"id": "w7", "form": "map", "lemma": "map", "node_kind": "word", "lexical_category": "noun", "external_pos_tags": [{"tagset": "PTB", "tag": "NN"}]},
             {"id": "w8", "form": ".", "lemma": ".", "node_kind": "word", "lexical_category": "punctuation", "external_pos_tags": [{"tagset": "PTB", "tag": "."}]},
         ]
-        record["clauses"].append({"id": "c1", "node_kind": "clause", "span": {"start": 0, "end": 2}, "clause_category": "infinitival_clause", "finiteness": "non-finite", "function": "supplementary_adverbial", "predicand": {"kind": "overt_constituent", "target": "subj"}})
-        record["constituents"].append({"id": "inf", "node_kind": "clause", "clause_ref": "c1", "span": {"start": 0, "end": 2}, "function": "supplementary_adverbial"})
+        record["clauses"].append({"id": "c1", "node_kind": "clause", "span": {"start": 0, "end": 2}, "clause_form": "to_infinitival", "finiteness": "nonfinite", "integration": ["supplementary"], "clause_construction": "other", "predicand": {"kind": "overt_constituent", "target": "subj"}})
+        record["constituents"].append({"id": "inf", "node_kind": "clause", "clause_ref": "c1", "span": {"start": 0, "end": 2}, "function": "supplementary_adverbial", "realization": {"clause_ref": "c1", "relation": "same_span_alias"}})
         self.assertEqual(validate_record(record, "nonfinite"), [])
 
     def test_external_pos_tag_requires_tagset(self) -> None:
@@ -98,7 +161,7 @@ class DataPipelineTests(unittest.TestCase):
         self.assertTrue(any("clause.subject" in error for error in validate_record(record, "wrong-subject-type")))
         record = copy.deepcopy(next(value for _, value in read_jsonl(BENCHMARK) if value["id"] == "new-17-purpose-infinitive"))
         record["clauses"][1]["predicand"]["target"] = "w4"
-        self.assertTrue(any("overt_constituent predicands must target an NP" in error for error in validate_record(record, "wrong-predicand-type")))
+        self.assertFalse(any("overt_constituent predicands must target an NP" in error for error in validate_record(record, "wrong-predicand-type")))
         record = copy.deepcopy(next(value for _, value in read_jsonl(BENCHMARK) if value["id"] == "legacy-07-put-complement"))
         record["lexical_valency"][0]["selected_complements"] = ["w0"]
         self.assertTrue(any("selected complement" in error and "not a word" in error for error in validate_record(record, "wrong-valency-type")))
@@ -113,7 +176,7 @@ class DataPipelineTests(unittest.TestCase):
 
     def test_alternative_analysis_requires_framework(self) -> None:
         record = copy.deepcopy(read_jsonl(GOLD)[0][1])
-        record["alternative_analyses"] = [{"label": "small-clause", "claims": ["the object and predicate form a small clause"], "analysis_type": "small_clause", "construction_type": "object_predication", "status": "established"}]
+        record["alternative_analyses"] = [{"id": "small-clause-alt", "label": "small-clause", "claims": ["the object and predicate form a small clause"], "analysis_type": "small_clause", "construction_type": "object_predication", "status": "established", "typed_analysis": {"kind": "alternative", "framework": "modern_descriptive", "status": "established"}}]
         self.assertTrue(any("framework" in error for error in validate_record(record, "bad-alternative")))
         record["alternative_analyses"][0]["framework"] = "modern_descriptive"
         self.assertEqual(validate_record(record, "good-alternative"), [])
@@ -122,7 +185,8 @@ class DataPipelineTests(unittest.TestCase):
         record = copy.deepcopy(read_jsonl(GOLD)[0][1])
         record["ambiguity"] = {"status": "genuinely_ambiguous", "analyses": [{"id": "vp", "structural_claims": ["VP attachment"], "interpretation": "instrument"}]}
         self.assertTrue(any("two structural analyses" in error for error in validate_record(record, "bad-ambiguity")))
-        record["ambiguity"]["analyses"].append({"id": "np", "structural_claims": ["NP attachment"], "interpretation": "man-associated"})
+        record["ambiguity"]["analyses"].append({"id": "np", "structural_claims": ["NP attachment"], "interpretation": "man-associated", "constituent_ids": ["obj"]})
+        record["ambiguity"]["analyses"][0]["constituent_ids"] = ["obj"]
         self.assertEqual(validate_record(record, "good-ambiguity"), [])
         record["ambiguity"]["analyses"][0]["attachment"] = "w0"
         self.assertTrue(any("ambiguity attachment" in error for error in validate_record(record, "bad-ambiguity-attachment")))
@@ -150,8 +214,9 @@ class DataPipelineTests(unittest.TestCase):
     def test_renderer_keeps_declared_structural_supervision(self) -> None:
         record = next(value for _, value in read_jsonl(BENCHMARK) if value["id"] == "legacy-07-put-complement")
         payload = json.loads(render_assistant(record))
-        for field in ("words", "dependencies", "lexical_valency", "semantic_roles", "sentence_type", "framework", "review_metadata"):
+        for field in ("words", "dependencies", "lexical_valency", "semantic_roles", "sentence_type", "framework"):
             self.assertIn(field, payload)
+        self.assertNotIn("review_metadata", payload)
 
     def test_malformed_rendered_assistant_json_fails(self) -> None:
         rendered = render_record(read_jsonl(GOLD)[0][1])
@@ -224,7 +289,7 @@ class DataPipelineTests(unittest.TestCase):
             rows[0]["review_metadata"]["review_status"] = "canonical_gold"
             path.write_text("\n".join(json.dumps(value) for value in rows) + "\n", encoding="utf-8")
             errors = validate_files([GOLD], path)
-            self.assertTrue(any("cannot claim canonical_gold" in error for error in errors))
+            self.assertTrue(any("evaluation-only" in error for error in errors))
 
     def test_structural_failure_returns_nonzero_cli_status(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

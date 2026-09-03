@@ -1,38 +1,40 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://english-syntax-tutor.local/schema/gold-annotation-0.2.json",
-  "title": "English Syntax Tutor V0.2 gold annotation",
-  "description": "Canonical CGEL-inspired descriptive syntax with explicit framework mappings.",
+  "$id": "https://english-syntax-tutor.local/schema/gold-annotation-0.4.json",
+  "title": "English Syntax Tutor V0.4 gold annotation",
+  "description": "V0.4 breaking wire-contract correction with typed linguistic authority and scoped governance metadata.",
   "type": "object",
   "additionalProperties": true,
   "required": [
     "schema_version", "id", "sentence", "capability_tags", "difficulty",
-    "source_type", "framework", "sentence_type", "clauses", "constituents",
+    "source_type", "framework", "sentence_type", "annotation_scope", "clauses", "constituents",
     "words", "dependencies", "explanation", "split"
   ],
   "allOf": [
     {"anyOf": [{"required": ["canonical_analysis"]}, {"required": ["preferred_analysis"]}]},
     {
-      "if": {"properties": {"schema_version": {"const": "0.2"}}},
+      "if": {"properties": {"schema_version": {"const": "0.4"}}},
       "then": {
         "required": ["canonical_analysis"],
+        "not": {"required": ["preferred_analysis"]},
         "properties": {
-          "words": {"items": {"required": ["node_kind"]}},
-          "clauses": {"items": {"required": ["node_kind", "clause_category"]}},
-          "constituents": {"items": {"required": ["node_kind"]}}
+          "words": {"items": {"not": {"anyOf": [{"required": ["pos"]}, {"required": ["pedagogical_terms"]}]}}},
+          "constituents": {"items": {"not": {"anyOf": [{"required": ["category"]}, {"required": ["role"]}]}}}
         }
       }
     }
   ],
   "properties": {
-    "schema_version": {"const": "0.2"},
+    "schema_version": {"const": "0.4"},
     "id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
     "sentence": {"type": "string", "minLength": 1},
     "capability_tags": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/capability"}, "uniqueItems": true},
     "difficulty": {"enum": ["foundation", "intermediate", "advanced", "expert"]},
     "source_type": {"enum": ["authored", "legacy_baseline", "minimal_pair", "contrast_set", "error_diagnosis", "adapted_public_domain"]},
     "framework": {"$ref": "#/$defs/framework"},
-    "sentence_type": {"enum": ["declarative", "interrogative", "exclamative", "imperative", "fragment"]},
+    "sentence_type": {"enum": ["declarative", "interrogative", "exclamative", "imperative", "fragment"], "description": "Derived/pedagogical sentence-level projection; root clause construction is authoritative."},
+    "annotation_scope": {"$ref": "#/$defs/annotationScope"},
+    "construction_tags": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
     "sentence_type_metadata": {"$ref": "#/$defs/sentenceTypeMetadata"},
     "sentence_classification": {"$ref": "#/$defs/sentenceClassification"},
     "construction_type": {"type": "string", "minLength": 1},
@@ -48,8 +50,9 @@
     "semantic_roles": {"type": "array", "items": {"$ref": "#/$defs/semanticRole"}},
     "canonical_analysis": {"$ref": "#/$defs/analysis"},
     "preferred_analysis": {"$ref": "#/$defs/analysis"},
-    "framework_alternatives": {"type": "array", "items": {"$ref": "#/$defs/alternativeAnalysis"}},
     "alternative_analyses": {"type": "array", "items": {"$ref": "#/$defs/alternativeAnalysis"}},
+    "framework_alternatives": false,
+    "legacy_alternative_metadata": {"type": "array", "items": {"$ref": "#/$defs/legacyAlternativeMetadata"}},
     "pedagogical_aliases": {"type": "array", "items": {"$ref": "#/$defs/pedagogicalAlias"}},
     "fusion_relations": {"type": "array", "items": {"$ref": "#/$defs/fusionRelation"}},
     "ambiguity": {"$ref": "#/$defs/ambiguity"},
@@ -70,18 +73,10 @@
       "semantic_roles", "framework_distinction", "error_diagnosis"
     ]},
     "framework": {
-      "type": "object", "additionalProperties": true, "required": ["preferred"],
+      "type": "object", "additionalProperties": false, "required": ["preferred"],
       "properties": {
-        "preferred": {"enum": ["cgel_inspired", "CGEL", "traditional_pedagogical", "modern_descriptive", "mixed"]},
-        "alternatives": {"type": "array", "items": {"$ref": "#/$defs/alternativeFramework"}},
+        "preferred": {"enum": ["cgel_inspired", "CGEL", "traditional_pedagogical", "modern_descriptive", "universal_dependencies", "UD", "penn_treebank", "PTB", "generative", "generative_grammar", "other_established", "mixed"]},
         "notes": {"type": "string"}
-      }
-    },
-    "alternativeFramework": {
-      "type": "object", "additionalProperties": true, "required": ["framework", "status", "analysis"],
-      "properties": {
-        "framework": {"enum": ["cgel_inspired", "CGEL", "traditional_pedagogical", "modern_descriptive", "mixed"]},
-        "status": {"const": "established"}, "analysis": {"type": "string", "minLength": 1}
       }
     },
     "sentenceTypeMetadata": {
@@ -91,6 +86,38 @@
     "sentenceClassification": {
       "type": "object", "additionalProperties": false, "required": ["scheme", "label"],
       "properties": {"scheme": {"type": "string", "minLength": 1}, "label": {"enum": ["simple", "compound", "complex"]}, "framework": {"type": "string", "minLength": 1}, "notes": {"type": "string"}}
+    },
+    "annotationScope": {
+      "type": "object", "additionalProperties": false,
+      "required": ["coverage", "dimensions"],
+      "properties": {
+        "coverage": {"enum": ["complete_constituency", "task_focused_partial"]},
+        "annotated_dimensions": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true, "description": "Legacy compatibility summary; use dimensions for scoped coverage."},
+        "intentionally_omitted": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true, "description": "Legacy compatibility summary; use dimensions for scoped coverage."},
+        "dimensions": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/coverageDimension"}, "uniqueItems": true},
+        "notes": {"type": "string"}
+      }
+    },
+    "coverageDimension": {
+      "type": "object", "additionalProperties": false,
+      "required": ["dimension", "scope", "completeness", "omission"],
+      "properties": {
+        "dimension": {"type": "string", "minLength": 1},
+        "scope": {"$ref": "#/$defs/coverageScope"},
+        "completeness": {"enum": ["complete", "partial", "unannotated", "omitted", "out_of_scope"]},
+        "omission": {"enum": ["none", "intentional", "not_applicable"]},
+        "evidence": {"enum": ["present", "empty", "unannotated"]},
+        "notes": {"type": "string"}
+      }
+    },
+    "coverageScope": {
+      "type": "object", "additionalProperties": false, "required": ["kind"],
+      "properties": {
+        "kind": {"enum": ["record", "node", "region"]},
+        "node": {"type": "string", "minLength": 1},
+        "start": {"type": "integer", "minimum": 0},
+        "end": {"type": "integer", "minimum": 1}
+      }
     },
     "span": {
       "type": "object", "additionalProperties": false, "required": ["start", "end"],
@@ -104,20 +131,28 @@
       "type": "object", "additionalProperties": true, "required": ["id", "form", "lemma", "lexical_category"],
       "properties": {
         "node_kind": {"const": "word"}, "id": {"type": "string", "minLength": 1}, "form": {"type": "string", "minLength": 1},
-        "lemma": {"type": "string", "minLength": 1}, "lexical_category": {"enum": ["noun", "verb", "adjective", "adverb", "preposition", "determiner", "pronoun", "coordinator", "subordinator", "auxiliary", "modal", "particle", "numeral", "interjection", "punctuation"]},
+        "lemma": {"type": "string", "minLength": 1}, "lexical_category": {"anyOf": [{"enum": ["noun", "verb", "adjective", "adverb", "preposition", "determinative", "pronoun", "coordinator", "subordinator", "auxiliary", "modal", "particle", "numeral", "interjection", "punctuation"]}, {"type": "null"}]},
+        "syntactic_function": {"type": "string", "minLength": 1},
+        "lexical_analysis": {"$ref": "#/$defs/lexicalAnalysis"},
         "external_pos_tags": {"type": "array", "items": {"$ref": "#/$defs/externalPosTag"}, "uniqueItems": true},
-        "pos": {"type": "string", "minLength": 1, "description": "V0.1 compatibility field; V0.2 records should use external_pos_tags."},
+        "pos": {"type": "string", "minLength": 1, "description": "Legacy compatibility field; V0.4 records should use external_pos_tags."},
         "pos_tagset": {"type": "string", "minLength": 1, "description": "Required with legacy pos when retained."},
-        "pedagogical_terms": {"type": "array", "items": {"type": "string", "minLength": 1}, "description": "V0.1 compatibility field; V0.2 aliases belong in pedagogical_aliases."}, "morphology": {"type": "object"}
+        "pedagogical_terms": {"type": "array", "items": {"type": "string", "minLength": 1}, "description": "Legacy compatibility field; V0.4 aliases belong in pedagogical_aliases."}, "morphology": {"type": "object"}
       }
     },
     "clause": {
-      "type": "object", "additionalProperties": true, "required": ["id", "span", "function", "finiteness"],
+      "type": "object", "additionalProperties": true, "required": ["id", "span", "node_kind", "finiteness", "clause_construction", "integration"],
+      "not": {"anyOf": [{"required": ["clause_category"]}, {"required": ["category"]}, {"required": ["function"]}, {"required": ["clause_type"]}, {"required": ["clause_status"]}]},
       "properties": {
         "node_kind": {"const": "clause"}, "id": {"type": "string", "minLength": 1}, "span": {"$ref": "#/$defs/span"},
-        "clause_category": {"enum": ["main_clause", "finite_clause", "nonfinite_clause", "relative_clause", "interrogative_clause", "gerund_participial_clause", "infinitival_clause", "comparative_clause", "supplementary_clause"]},
-        "category": {"type": "string", "description": "V0.1 compatibility alias for clause_category."}, "finiteness": {"enum": ["finite", "non-finite"]}, "function": {"type": "string", "minLength": 1},
-        "subject": {"type": ["string", "null"]}, "predicand": {"anyOf": [{"type": "string"}, {"type": "null"}, {"$ref": "#/$defs/predicand"}]}, "head": {"type": ["string", "null"]}
+        "finiteness": {"enum": ["finite", "nonfinite", "verbless", "unspecified"]},
+        "clause_form": {"enum": ["to_infinitival", "bare_infinitival", "gerund_participial", "past_participial", "unspecified"]},
+        "clause_construction": {"enum": ["declarative", "interrogative", "relative", "exclamative", "content", "conditional", "comparative", "coordinate", "other", "unresolved"]},
+        "integration": {"type": "array", "minItems": 1, "items": {"enum": ["root", "subordinate", "supplementary", "coordinate_member", "unresolved"]}, "uniqueItems": true},
+        "subject": {"type": ["string", "null"]},
+        "predicand": {"anyOf": [{"type": "string"}, {"type": "null"}, {"$ref": "#/$defs/predicand"}]},
+        "head": {"type": ["string", "null"]}, "marker_ids": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+        "integration_parent": {"type": ["string", "null"]}
       }
     },
     "constituent": {
@@ -125,8 +160,49 @@
       "properties": {
         "node_kind": {"enum": ["phrase", "clause", "word"]}, "id": {"type": "string", "minLength": 1}, "span": {"$ref": "#/$defs/span"},
         "phrase_category": {"enum": ["NP", "VP", "PP", "AdjP", "AdvP", "DetP", "CoordP", "ComparativeP", "marker", "word"]},
-        "category": {"type": "string", "description": "V0.1 compatibility alias; Clause is not a V0.2 phrase category."}, "clause_ref": {"type": "string", "minLength": 1}, "function": {"type": "string", "minLength": 1}, "head": {"type": ["string", "null"]}, "parent": {"type": ["string", "null"]}, "relation_label": {"type": "string", "minLength": 1}, "role": {"type": ["string", "null"], "description": "V0.1 compatibility field; V0.2 semantic roles belong in semantic_roles."}
+        "category": {"type": "string", "description": "Legacy compatibility alias; Clause is not a V0.4 phrase category."}, "clause_ref": {"type": "string", "minLength": 1}, "function": {"type": "string", "minLength": 1}, "head": {"type": ["string", "null"]}, "parent": {"type": ["string", "null"]}, "relation_label": {"type": "string", "minLength": 1}, "role": {"type": ["string", "null"], "description": "Legacy compatibility field; V0.4 semantic roles belong in semantic_roles."},
+        "realization": {"$ref": "#/$defs/realization"}, "span_relation": {"enum": ["same_span_alias", "expanded_realization", "other"]}
       }
+    },
+    "realization": {
+      "type": "object", "additionalProperties": false, "required": ["clause_ref", "relation"],
+      "properties": {
+        "clause_ref": {"type": "string", "minLength": 1},
+        "relation": {"enum": ["same_span_alias", "expanded_realization", "other"]},
+        "context": {"type": "string", "minLength": 1},
+        "layer": {"type": "string", "minLength": 1}
+      }
+    },
+    "lexicalAnalysis": {
+      "type": "object", "additionalProperties": false, "required": ["status", "review_required", "candidates"],
+      "properties": {
+        "status": {"const": "unresolved"}, "review_required": {"const": true},
+        "candidates": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/lexicalCandidate"}},
+        "note": {"type": "string"}
+      }
+    },
+    "lexicalCandidate": {
+      "type": "object", "additionalProperties": false,
+      "required": [],
+      "properties": {
+        "framework": {"enum": ["cgel_inspired", "CGEL", "traditional_pedagogical", "modern_descriptive", "universal_dependencies", "UD", "penn_treebank", "PTB", "generative", "generative_grammar", "other_established", "mixed"]},
+        "category": {"type": "string", "minLength": 1},
+        "lexical_category": {"type": "string", "minLength": 1},
+        "category_namespace": {"type": "string", "minLength": 1},
+        "status": {"enum": ["candidate", "established", "unresolved"]},
+        "syntactic_function": {"type": "string", "minLength": 1},
+        "claim": {"type": "string", "minLength": 1}
+      },
+      "anyOf": [
+        {"required": ["category"]},
+        {"required": ["lexical_category"]}
+      ],
+      "allOf": [
+        {"anyOf": [
+          {"required": ["framework"]},
+          {"required": ["category_namespace"]}
+        ]}
+      ]
     },
     "predicand": {
       "type": "object", "additionalProperties": false, "required": ["kind"],
@@ -149,11 +225,71 @@
       "properties": {"constituent": {"type": "string", "minLength": 1}, "role": {"type": "string", "minLength": 1}, "predicate": {"type": "string"}}
     },
     "analysis": {
-      "type": "object", "additionalProperties": true, "required": ["label", "claims"],
-      "properties": {"label": {"type": "string", "minLength": 1}, "claims": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}, "framework": {"type": "string"}, "construction_type": {"type": "string"}, "analysis_type": {"type": "string"}, "status": {"type": "string"}}
+      "type": "object", "additionalProperties": true, "required": ["label", "claims", "typed_analysis"],
+      "properties": {"label": {"type": "string", "minLength": 1}, "claims": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}, "framework": {"type": "string"}, "construction_type": {"type": "string"}, "analysis_type": {"type": "string"}, "status": {"type": "string"}, "typed_analysis": {"$ref": "#/$defs/typedAnalysis"}}
+    },
+    "typedAnalysis": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "framework", "status"],
+      "properties": {"kind": {"type": "string", "minLength": 1}, "framework": {"enum": ["cgel_inspired", "CGEL", "traditional_pedagogical", "modern_descriptive", "universal_dependencies", "UD", "penn_treebank", "PTB", "generative", "generative_grammar", "other_established", "mixed"]}, "status": {"enum": ["descriptive", "established", "unresolved", "review_required"]}, "arguments": {"type": "object"}, "entities": {"type": "array", "items": {"$ref": "#/$defs/typedEntity"}, "uniqueItems": true}, "relations": {"type": "array", "items": {"$ref": "#/$defs/typedRelation"}}, "notes": {"type": "string"}}
+    },
+    "typedEntity": {
+      "type": "object", "additionalProperties": false, "required": ["id", "kind"],
+      "properties": {"id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"}, "kind": {"type": "string", "minLength": 1}}
+    },
+    "typedReference": {
+      "oneOf": [
+        {"type": "object", "additionalProperties": false, "required": ["namespace", "id"], "properties": {"namespace": {"enum": ["word", "constituent", "clause", "analysis"]}, "id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"}}},
+        {"type": "string", "pattern": "^(?:word|constituent|clause|analysis):[A-Za-z0-9][A-Za-z0-9_.:-]*$"}
+      ]
+    },
+    "typedRelation": {
+      "type": "object", "additionalProperties": false, "required": ["id", "type", "arity", "source"],
+      "allOf": [
+        {"if": {"required": ["arity"], "properties": {"arity": {"const": "binary"}}}, "then": {"required": ["target"]}},
+        {"if": {"required": ["arity"], "properties": {"arity": {"const": "unary"}}}, "then": {"not": {"required": ["target"]}}},
+        {"anyOf": [
+          {"properties": {"type": {"enum": ["attachment", "construction", "control", "coreference", "cross_node", "dependency", "framework_relation", "predication", "raising", "realization", "realization_link", "selection", "category", "clause_construction", "clause_integration", "constituent_function", "external_realization", "finiteness", "function", "integration", "lexical_category", "phrase_category", "syntactic_function"]}}},
+          {"properties": {"type": {"pattern": "^[A-Za-z][A-Za-z0-9_.-]*(?:(?:[:/])[A-Za-z][A-Za-z0-9_.-]*)+$"}}},
+          {"required": ["namespace"]},
+          {"required": ["framework"]}
+        ]}
+      ],
+      "properties": {
+        "id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"},
+        "type": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z][A-Za-z0-9_.-]*(?:(?:[:/])[A-Za-z][A-Za-z0-9_.-]*)?$"},
+        "arity": {"enum": ["unary", "binary"]},
+        "source": {"$ref": "#/$defs/typedReference"},
+        "target": {"$ref": "#/$defs/typedReference"},
+        "framework": {"enum": ["cgel_inspired", "CGEL", "traditional_pedagogical", "modern_descriptive", "universal_dependencies", "UD", "penn_treebank", "PTB", "generative", "generative_grammar", "other_established", "mixed"]},
+        "namespace": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z][A-Za-z0-9_.-]*(?:(?:[:/])[A-Za-z][A-Za-z0-9_.-]*)?$"},
+        "status": {"enum": ["descriptive", "established", "unresolved", "review_required"]},
+        "note": {"type": "string"}
+      }
     },
     "alternativeAnalysis": {
-      "allOf": [{"$ref": "#/$defs/analysis"}, {"required": ["framework", "status"], "properties": {"framework": {"enum": ["cgel_inspired", "CGEL", "traditional_pedagogical", "modern_descriptive", "mixed"]}, "status": {"const": "established"}}}]
+      "type": "object", "additionalProperties": false, "required": ["id", "framework", "status", "typed_analysis"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"},
+        "label": {"type": "string", "minLength": 1},
+        "claims": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1},
+        "framework": {"enum": ["cgel_inspired", "CGEL", "traditional_pedagogical", "modern_descriptive", "universal_dependencies", "UD", "penn_treebank", "PTB", "generative", "generative_grammar", "other_established", "mixed"]},
+        "status": {"enum": ["established", "unresolved", "review_required"]},
+        "construction_type": {"type": "string", "minLength": 1},
+        "analysis_type": {"type": "string", "minLength": 1},
+        "typed_analysis": {"$ref": "#/$defs/typedAnalysis"},
+        "learner_explanation": {"type": "string", "minLength": 1},
+        "linked_wrapper_ids": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+        "linked_constituent_ids": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+        "linked_clause_refs": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+        "linked_relation_ids": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true}
+      }
+    },
+    "legacyAlternativeMetadata": {
+      "type": "object", "additionalProperties": false, "required": ["framework", "status", "analysis"],
+      "properties": {
+        "framework": {"enum": ["cgel_inspired", "CGEL", "traditional_pedagogical", "modern_descriptive", "universal_dependencies", "UD", "penn_treebank", "PTB", "generative", "generative_grammar", "other_established", "mixed"]},
+        "status": {"const": "established"}, "analysis": {"type": "string", "minLength": 1}, "source_field": {"type": "string", "const": "framework.alternatives"}
+      }
     },
     "pedagogicalAlias": {
       "type": "object", "additionalProperties": false, "required": ["term", "framework"],
@@ -167,11 +303,21 @@
     },
     "ambiguity": {
       "type": "object", "additionalProperties": false, "required": ["status", "analyses"],
-      "properties": {"status": {"enum": ["unambiguous", "genuinely_ambiguous", "multiple_established_analyses_with_preferred_reading"]}, "preferred_analysis": {"type": ["string", "null"]}, "analyses": {"type": "array", "items": {"$ref": "#/$defs/ambiguityAnalysis"}}}
+      "properties": {"status": {"enum": ["unambiguous", "genuinely_ambiguous", "multiple_established_analyses_with_preferred_reading"]}, "preferred_analysis": {"type": ["string", "null"]}, "analyses": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/ambiguityAnalysis"}}}
     },
     "ambiguityAnalysis": {
       "type": "object", "additionalProperties": false, "required": ["id", "structural_claims", "interpretation"],
-      "properties": {"id": {"type": "string"}, "structural_claims": {"type": "array", "items": {"type": "string"}}, "interpretation": {"type": "string"}, "framework": {"type": "string"}, "preference_basis": {"type": "string"}, "attachment": {"type": "string"}, "target": {"type": "string"}, "constituent": {"type": "string"}, "clause": {"type": "string"}}
+      "properties": {
+        "id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"},
+        "structural_claims": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "interpretation": {"type": "string", "minLength": 1}, "framework": {"type": "string", "minLength": 1}, "preference_basis": {"type": "string", "minLength": 1},
+        "attachment": {"type": "string", "minLength": 1}, "target": {"type": "string", "minLength": 1}, "constituent": {"type": "string", "minLength": 1}, "clause": {"type": "string", "minLength": 1},
+        "alternative_ids": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+        "wrapper_ids": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+        "relation_ids": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+        "constituent_ids": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+        "clause_refs": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true}
+      }
     },
     "constructionSignature": {
       "type": "object", "additionalProperties": true, "description": "Patterns use stable category/function descriptors, never record-local IDs.", "required": ["predicate_lemma", "construction_type", "argument_pattern", "function_pattern"],
@@ -193,7 +339,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["review_status", "reviewer_type", "migration_version"],
       "properties": {
-        "review_status": {"enum": ["schema_migrated", "structurally_validated", "review_required", "linguistically_reviewed", "canonical_gold"]},
+        "review_status": {"enum": ["schema_migrated", "structurally_validated", "review_required", "linguistically_reviewed", "approved_for_training", "canonical_gold"]},
         "reviewer_type": {"enum": ["automated_structural", "independent_linguistic", "human_annotation", "mixed"]},
         "review_date": {"type": "string", "minLength": 1},
         "provenance": {"type": "string", "minLength": 1},

@@ -18,12 +18,17 @@ CAPABILITY_TAGS = {
     "predicative_complement", "pp_attachment", "ambiguity", "coordination",
     "semantic_roles", "framework_distinction", "error_diagnosis",
 }
-FRAMEWORKS = {"cgel_inspired", "CGEL", "traditional_pedagogical", "modern_descriptive", "mixed"}
+FRAMEWORKS = {
+    "cgel_inspired", "CGEL", "traditional_pedagogical", "modern_descriptive",
+    "universal_dependencies", "UD", "penn_treebank", "PTB", "generative", "generative_grammar", "other_established", "mixed",
+}
 CANONICAL_FRAMEWORK = "cgel_inspired"
 SPLITS = {"train", "validation", "benchmark"}
-SCHEMA_VERSIONS = {"0.1", "0.2"}
+SCHEMA_VERSIONS = {"0.1", "0.2", "0.4"}
+CANONICAL_SCHEMA_VERSION = "0.4"
+LEGACY_SCHEMA_VERSIONS = {"0.1", "0.2", "0.3"}
 LEXICAL_CATEGORIES = {
-    "noun", "verb", "adjective", "adverb", "preposition", "determiner", "pronoun",
+    "noun", "verb", "adjective", "adverb", "preposition", "determinative", "pronoun",
     "coordinator", "subordinator", "auxiliary", "modal", "particle", "numeral",
     "interjection", "punctuation",
 }
@@ -32,7 +37,7 @@ FUNCTIONS = {
     "subject", "object", "indirect_object", "predicative_complement", "subject_predicative_complement",
     "object_predicative_complement", "selected_locative_complement", "selected_complement",
     "complement", "adjunct", "adverbial", "supplementary_adverbial", "relative_modifier",
-    "determinative", "marker", "coordinate", "extraposed_subject", "predicand", "head",
+    "determiner", "marker", "coordinate", "extraposed_subject", "predicand", "head",
 }
 DIFFICULTIES = {"foundation", "intermediate", "advanced", "expert"}
 SENTENCE_TYPES = {"declarative", "interrogative", "exclamative", "imperative", "fragment"}
@@ -44,16 +49,31 @@ SEMANTIC_ROLES = {
     "Result", "State", "Support", "Time", "Purpose", "Proposition", "Addressee",
     "Classification", "Temporal/Aspectual", "OTHER", "UNSPECIFIED",
 }
+CLAUSE_CONSTRUCTIONS = {
+    "declarative", "interrogative", "relative", "exclamative", "content",
+    "conditional", "comparative", "coordinate", "other", "unresolved",
+}
+# Backwards-compatible import name used by older tooling. New V0.4 records
+# use clause_construction rather than clause_type.
+CLAUSE_TYPES = CLAUSE_CONSTRUCTIONS | {"matrix", "declarative_content"}
+# Retained only so the V0.1/V0.2 reader can report legacy records during migration.
 CLAUSE_CATEGORIES = {
     "main_clause", "finite_clause", "nonfinite_clause", "relative_clause", "interrogative_clause",
     "gerund_participial_clause", "infinitival_clause", "comparative_clause", "supplementary_clause",
 }
+CLAUSE_INTEGRATIONS = {"root", "subordinate", "supplementary", "coordinate_member", "unresolved"}
+CLAUSE_STATUSES = CLAUSE_INTEGRATIONS | {"supplement"}
+CLAUSE_FINITE_VALUES = {"finite", "nonfinite", "verbless", "unspecified"}
+CLAUSE_FORMS = {"to_infinitival", "bare_infinitival", "gerund_participial", "past_participial", "unspecified"}
+ANNOTATION_COVERAGES = {"complete_constituency", "task_focused_partial"}
+ANNOTATED_DIMENSIONS = {
+    "tokens", "lexical_category", "phrase_constituency", "constituency", "clause_ontology", "clause_structure",
+    "syntactic_function", "vp_complementation", "np_internal_constituency", "dependencies", "semantic_roles",
+    "lexical_valency", "framework_mapping", "construction_relations",
+}
 NODE_KINDS = {"word", "phrase", "clause"}
 AMBIGUITY_STATUSES = {
     "unambiguous", "genuinely_ambiguous", "multiple_established_analyses_with_preferred_reading",
-}
-ALTERNATIVE_CONSTRUCTION_WHITELIST = {
-    "small_clause": {"object_predication", "resultative", "caused_state"},
 }
 
 
@@ -94,11 +114,11 @@ def tokens(text: str) -> list[str]:
     return re.findall(r"[a-z0-9]+(?:['’][a-z0-9]+)?", normalized_text(text))
 
 
-SURFACE_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9]+(?:['’][A-Za-z0-9]+)?|[^\w\s]", re.UNICODE)
+SURFACE_TOKEN_PATTERN = re.compile(r"\w+(?:['’]\w+)?|[^\w\s]", re.UNICODE)
 
 
 def surface_tokens(text: str) -> list[str]:
-    """Tokenize sentence text using the V0.2 surface convention.
+    """Tokenize sentence text using the V0.4 surface convention.
 
     Words and punctuation are both tokens.  Apostrophes internal to a word
     remain part of that token; all other punctuation is a separate token.
@@ -196,7 +216,8 @@ def construction_signature(record: dict[str, Any]) -> dict[str, Any] | None:
             if item.get("node_kind") == "phrase":
                 category = item.get("phrase_category", item.get("category", "unknown"))
                 return f"phrase:{category}:{item.get('function', 'unspecified')}"
-            return f"clause:{item.get('clause_category', item.get('category', 'unknown'))}:{item.get('function', 'unspecified')}"
+            clause_type = item.get("clause_construction", item.get("clause_type", item.get("clause_category", item.get("category", "unknown"))))
+            return f"clause:{clause_type}:unspecified"
 
         for field in ("argument_pattern", "function_pattern"):
             values = signature.get(field)
@@ -240,7 +261,7 @@ def construction_signature(record: dict[str, Any]) -> dict[str, Any] | None:
             argument_pattern.append(f"phrase:{item.get('phrase_category', 'unknown')}")
             function_pattern.append(str(item.get("function", "unspecified")))
         elif item.get("node_kind") == "clause":
-            argument_pattern.append(f"clause:{item.get('clause_category', 'unknown')}")
+            argument_pattern.append(f"clause:{item.get('clause_construction', item.get('clause_type', item.get('clause_category', 'unknown')))}")
             function_pattern.append(str(item.get("function", "unspecified")))
         else:
             argument_pattern.append("unknown")

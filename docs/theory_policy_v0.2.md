@@ -1,5 +1,10 @@
 # English Syntax Tutor V0.2 Theory Policy
 
+> V0.4 note: [`ontology_v0.4.md`](ontology_v0.4.md) is authoritative for the
+> canonical framework boundary, clause dimensions, coverage contract, and
+> token/span convention. The V0.2 decisions below remain historical guidance
+> where V0.4 does not supersede them.
+
 Status: authoritative for V0.2 annotation and data validation. The canonical framework is **CGEL-inspired modern descriptive English syntax**. “Inspired” is intentional: records may compare traditional pedagogical grammar, Universal Dependencies (UD), Penn Treebank (PTB), generative terminology, or another established modern analysis when the framework is named. A framework alternative never silently changes the canonical analysis.
 
 ## Cross-cutting invariants
@@ -162,7 +167,7 @@ Status: authoritative for V0.2 annotation and data validation. The canonical fra
 
 **Rationale.** Learners can encounter “gerund”, “动名词”, or “obligatory locative Adverbial” without changing the gold analysis.
 
-**Canonical representation.** `canonical_analysis` (with `preferred_analysis` as a V0.1 compatibility alias) is authoritative; `framework.alternatives`/`alternative_analyses` are established alternatives; `pedagogical_aliases` is learner-facing.
+**Canonical representation.** `canonical_analysis` (with `preferred_analysis` as a V0.1 compatibility alias) is authoritative; V0.4 `alternative_analyses[]` is the sole authoritative alternative channel and each entry is framework/status/typed-analysis qualified; `pedagogical_aliases` is learner-facing. The former `framework.alternatives` and `framework_alternatives` fields are legacy display/provenance only and are rejected in canonical V0.4 records.
 
 **Allowed alternatives.** Traditional labels may be exposed when marked `traditional_pedagogical`.
 
