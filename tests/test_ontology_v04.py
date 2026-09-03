@@ -136,7 +136,7 @@ class OntologyV04Tests(unittest.TestCase):
     def test_renderer_distinguishes_empty_from_unannotated_and_allowlists(self) -> None:
         record = copy.deepcopy(FIXTURE)
         record["annotation_scope"]["dimensions"] = [
-            {"dimension": "clause_ontology", "scope": {"kind": "record"}, "completeness": "partial", "omission": "none", "evidence": "present"},
+            {"dimension": "clause_ontology", "scope": {"kind": "record"}, "completeness": "complete", "omission": "none", "evidence": "present"},
             {"dimension": "dependencies", "scope": {"kind": "record"}, "completeness": "partial", "omission": "intentional", "evidence": "unannotated"},
             {"dimension": "semantic_roles", "scope": {"kind": "record"}, "completeness": "partial", "omission": "intentional", "evidence": "unannotated"},
         ]
@@ -155,12 +155,17 @@ class OntologyV04Tests(unittest.TestCase):
             entry for entry in record["annotation_scope"]["dimensions"]
             if entry["dimension"] == "dependencies"
         )
+        dependency_scope["completeness"] = "complete"
         dependency_scope["omission"] = "none"
         dependency_scope["evidence"] = "empty"
         self.assertEqual(linguistic_projection(record)["dependencies"], [])
 
     def test_renderer_requires_explicit_mode_for_lexical_candidates(self) -> None:
         record = copy.deepcopy(FIXTURE)
+        record["annotation_scope"]["dimensions"] = [
+            {"dimension": "tokens", "scope": {"kind": "record"}, "completeness": "complete", "omission": "none", "evidence": "present"},
+            {"dimension": "lexical_category", "scope": {"kind": "record"}, "completeness": "complete", "omission": "none", "evidence": "present"},
+        ]
         record["words"][0]["lexical_category"] = None
         record["words"][0]["lexical_analysis"] = {
             "status": "unresolved",
@@ -171,6 +176,9 @@ class OntologyV04Tests(unittest.TestCase):
             "status": "genuinely_ambiguous",
             "analyses": [{"id": "a", "structural_claims": ["one"], "interpretation": "one"}, {"id": "b", "structural_claims": ["two"], "interpretation": "two"}],
         }
+        record["annotation_scope"]["dimensions"].append(
+            {"dimension": "ambiguity", "scope": {"kind": "record"}, "completeness": "complete", "omission": "none", "evidence": "present"}
+        )
         default = linguistic_projection(record)
         self.assertNotIn("lexical_analysis", default["words"][0])
         self.assertEqual(default["ambiguity"]["status"], "genuinely_ambiguous")
@@ -182,7 +190,11 @@ class OntologyV04Tests(unittest.TestCase):
             linguistic_projection(record, rendering_mode="governance")
 
     def test_rendered_validator_rejects_nested_governance_leak(self) -> None:
-        rendered = render_record(copy.deepcopy(FIXTURE))
+        fixture = copy.deepcopy(FIXTURE)
+        fixture["annotation_scope"]["dimensions"] = [
+            {"dimension": "clause_ontology", "scope": {"kind": "record"}, "completeness": "complete", "omission": "none", "evidence": "present"},
+        ]
+        rendered = render_record(fixture)
         payload = json.loads(rendered["messages"][2]["content"])
         payload["clauses"][0]["review_required"] = True
         rendered["messages"][2]["content"] = json.dumps(payload)
@@ -335,6 +347,8 @@ class OntologyV04Tests(unittest.TestCase):
         self.assertTrue(any("schema validation failed" in error for error in errors))
         record["framework"]["alternatives"] = [legacy]
         record["legacy_alternative_metadata"] = [legacy]
+        framework_scope = next(entry for entry in record["annotation_scope"]["dimensions"] if entry["dimension"] == "framework_mapping")
+        framework_scope.update(completeness="complete", omission="none", evidence="present")
         projection = linguistic_projection(record)
         self.assertNotIn("framework_alternatives", projection)
         self.assertNotIn("legacy_alternative_metadata", projection)

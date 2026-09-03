@@ -211,11 +211,10 @@ class DataPipelineTests(unittest.TestCase):
         self.assertIn("Proposed analysis", rendered["messages"][1]["content"])
         self.assertIsInstance(json.loads(rendered["messages"][2]["content"]), dict)
 
-    def test_renderer_keeps_declared_structural_supervision(self) -> None:
+    def test_renderer_suppresses_record_partial_uncovered_targets(self) -> None:
         record = next(value for _, value in read_jsonl(BENCHMARK) if value["id"] == "legacy-07-put-complement")
         payload = json.loads(render_assistant(record))
-        for field in ("words", "dependencies", "lexical_valency", "semantic_roles", "sentence_type", "framework"):
-            self.assertIn(field, payload)
+        self.assertEqual(set(payload), {"sentence"})
         self.assertNotIn("review_metadata", payload)
 
     def test_malformed_rendered_assistant_json_fails(self) -> None:

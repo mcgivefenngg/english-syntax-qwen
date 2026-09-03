@@ -175,19 +175,186 @@ def _rendered_governance_leaks(value: Any, context: str | None = None, path: str
     if isinstance(value, dict):
         for key, item in value.items():
             key_path = f"{path}.{key}" if path else key
-            if key in forbidden or (key == "status" and context != "ambiguity"):
+            if key in forbidden or (key == "status" and context != "ambiguity") or (key in {"notes", "note"} and context in {"typed_analysis", "typed_relation"}):
                 leaks.append(key_path)
                 continue
             child_context = {
                 "ambiguity": "ambiguity", "analyses": "ambiguity_analysis", "clauses": "clause",
                 "constituents": "constituent", "words": "word", "dependencies": "dependency",
-                "typed_analysis": "typed_analysis", "lexical_analysis": "lexical_analysis",
+                "typed_analysis": "typed_analysis", "typed_relation": "typed_relation", "relations": "typed_relation", "lexical_analysis": "lexical_analysis",
             }.get(key)
             leaks.extend(_rendered_governance_leaks(item, child_context, key_path))
     elif isinstance(value, list):
         for index, item in enumerate(value):
             leaks.extend(_rendered_governance_leaks(item, context, f"{path}[{index}]"))
     return leaks
+
+
+def _rendered_typed_reference(value: Any) -> tuple[str, str] | None:
+    if isinstance(value, dict) and isinstance(value.get("namespace"), str) and isinstance(value.get("id"), str):
+        return value["namespace"], value["id"]
+    if isinstance(value, str) and ":" in value:
+        namespace, identifier = value.split(":", 1)
+        if namespace and identifier:
+            return namespace, identifier
+    return None
+
+
+def _validate_rendered_references(payload: dict[str, Any], location: str, errors: list[str]) -> None:
+    """Check references remaining after coverage-aware linguistic projection."""
+    collections = {field: payload.get(field) for field in ("words", "constituents", "clauses")}
+    ids_by_kind: dict[str, set[str]] = {"word": set(), "constituent": set(), "clause": set()}
+    objects: dict[str, str] = {}
+    for field, values in collections.items():
+        if not isinstance(values, list):
+            continue
+        kind = field[:-1] if field != "constituents" else "constituent"
+        for index, item in enumerate(values):
+            if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+                _error(errors, f"{location}.{field}[{index}]", "projected node must have an id")
+                continue
+            identifier = item["id"]
+            if identifier in objects:
+                _error(errors, f"{location}.{field}[{index}].id", "projected node id must be unique")
+            objects[identifier] = kind
+            ids_by_kind[kind].add(identifier)
+
+    def require(identifier: Any, expected: set[str], path: str) -> None:
+        if identifier is None:
+            return
+        if not isinstance(identifier, str) or identifier not in objects or objects[identifier] not in expected:
+            _error(errors, path, "projected reference must target a retained node")
+
+    for field, values in collections.items():
+        if not isinstance(values, list):
+            continue
+        for index, item in enumerate(values):
+            if not isinstance(item, dict):
+                continue
+            item_path = f"{location}.{field}[{index}]"
+            if field == "clauses":
+                for ref_field in ("subject", "head", "integration_parent"):
+                    require(item.get(ref_field), {"word", "constituent", "clause"}, f"{item_path}.{ref_field}")
+                predicand = item.get("predicand")
+                if isinstance(predicand, dict):
+                    require(predicand.get("target"), {"word", "constituent", "clause"}, f"{item_path}.predicand.target")
+                for marker_index, marker in enumerate(item.get("marker_ids", []) if isinstance(item.get("marker_ids"), list) else []):
+                    require(marker, {"word"}, f"{item_path}.marker_ids[{marker_index}]")
+            elif field == "constituents":
+                for ref_field in ("head", "parent"):
+                    require(item.get(ref_field), {"word", "constituent", "clause"}, f"{item_path}.{ref_field}")
+                require(item.get("clause_ref"), {"clause"}, f"{item_path}.clause_ref")
+                realization = item.get("realization")
+                if isinstance(realization, dict):
+                    require(realization.get("clause_ref"), {"clause"}, f"{item_path}.realization.clause_ref")
+
+    for field, values in (("dependencies", payload.get("dependencies")), ("heads", payload.get("heads"))):
+        if not isinstance(values, list):
+            continue
+        for index, item in enumerate(values):
+            if not isinstance(item, dict):
+                continue
+            item_path = f"{location}.{field}[{index}]"
+            require(item.get("head"), {"word", "constituent", "clause"}, f"{item_path}.head")
+            require(item.get("dependent"), {"word", "constituent", "clause"}, f"{item_path}.dependent")
+
+    for index, value in enumerate(payload.get("complements", []) if isinstance(payload.get("complements"), list) else []):
+        require(value, {"constituent", "clause"}, f"{location}.complements[{index}]")
+    for index, value in enumerate(payload.get("adjuncts", []) if isinstance(payload.get("adjuncts"), list) else []):
+        require(value, {"constituent", "clause"}, f"{location}.adjuncts[{index}]")
+    for index, item in enumerate(payload.get("lexical_valency", []) if isinstance(payload.get("lexical_valency"), list) else []):
+        if not isinstance(item, dict):
+            continue
+        for selected_index, selected in enumerate(item.get("selected_complements", []) if isinstance(item.get("selected_complements"), list) else []):
+            require(selected, {"constituent", "clause"}, f"{location}.lexical_valency[{index}].selected_complements[{selected_index}]")
+    for index, item in enumerate(payload.get("semantic_roles", []) if isinstance(payload.get("semantic_roles"), list) else []):
+        if isinstance(item, dict):
+            require(item.get("constituent"), {"constituent"}, f"{location}.semantic_roles[{index}].constituent")
+            predicate = item.get("predicate")
+            if isinstance(predicate, str) and predicate in objects:
+                require(predicate, {"word"}, f"{location}.semantic_roles[{index}].predicate")
+    for index, item in enumerate(payload.get("fusion_relations", []) if isinstance(payload.get("fusion_relations"), list) else []):
+        if not isinstance(item, dict):
+            continue
+        path = f"{location}.fusion_relations[{index}]"
+        require(item.get("fused_element"), {"word"}, f"{path}.fused_element")
+        require(item.get("whole_constituent"), {"constituent", "clause"}, f"{path}.whole_constituent")
+        require(item.get("relative_clause"), {"clause"}, f"{path}.relative_clause")
+        dependency = item.get("dependency")
+        if isinstance(dependency, dict):
+            require(dependency.get("head"), {"word", "constituent", "clause"}, f"{path}.dependency.head")
+            require(dependency.get("dependent"), {"word", "constituent", "clause"}, f"{path}.dependency.dependent")
+
+    relation_ids: set[str] = set()
+    for analysis_field in ("canonical_analysis", "preferred_analysis"):
+        analysis = payload.get(analysis_field)
+        typed = analysis.get("typed_analysis") if isinstance(analysis, dict) else None
+        relations = typed.get("relations") if isinstance(typed, dict) else None
+        if not isinstance(relations, list):
+            continue
+        for index, relation in enumerate(relations):
+            if not isinstance(relation, dict):
+                continue
+            relation_id = relation.get("id")
+            if isinstance(relation_id, str):
+                relation_ids.add(relation_id)
+            relation_path = f"{location}.{analysis_field}.typed_analysis.relations[{index}]"
+            for ref_field in ("source", "target"):
+                reference = _rendered_typed_reference(relation.get(ref_field))
+                if reference is None:
+                    continue
+                namespace, identifier = reference
+                if namespace in ids_by_kind and identifier not in ids_by_kind[namespace]:
+                    _error(errors, f"{relation_path}.{ref_field}", "typed relation reference targets a node omitted from the projection")
+    for alternative_index, alternative in enumerate(payload.get("alternative_analyses", []) if isinstance(payload.get("alternative_analyses"), list) else []):
+        typed = alternative.get("typed_analysis") if isinstance(alternative, dict) else None
+        relations = typed.get("relations") if isinstance(typed, dict) else None
+        if not isinstance(relations, list):
+            continue
+        for relation_index, relation in enumerate(relations):
+            if not isinstance(relation, dict):
+                continue
+            relation_id = relation.get("id")
+            if isinstance(relation_id, str):
+                relation_ids.add(relation_id)
+            relation_path = f"{location}.alternative_analyses[{alternative_index}].typed_analysis.relations[{relation_index}]"
+            for ref_field in ("source", "target"):
+                reference = _rendered_typed_reference(relation.get(ref_field))
+                if reference is None:
+                    continue
+                namespace, identifier = reference
+                if namespace in ids_by_kind and identifier not in ids_by_kind[namespace]:
+                    _error(errors, f"{relation_path}.{ref_field}", "typed relation reference targets a node omitted from the projection")
+
+    for field in ("alternative_analyses",):
+        for index, item in enumerate(payload.get(field, []) if isinstance(payload.get(field), list) else []):
+            if not isinstance(item, dict):
+                continue
+            path = f"{location}.{field}[{index}]"
+            for link_field in ("linked_wrapper_ids", "linked_constituent_ids", "linked_clause_refs"):
+                for link_index, link in enumerate(item.get(link_field, []) if isinstance(item.get(link_field), list) else []):
+                    if link not in objects:
+                        _error(errors, f"{path}.{link_field}[{link_index}]", "alternative linkage targets a node omitted from the projection")
+            for link_index, link in enumerate(item.get("linked_relation_ids", []) if isinstance(item.get("linked_relation_ids"), list) else []):
+                if link not in relation_ids:
+                    _error(errors, f"{path}.linked_relation_ids[{link_index}]", "alternative linkage targets a relation omitted from the projection")
+
+    ambiguity = payload.get("ambiguity")
+    if isinstance(ambiguity, dict) and isinstance(ambiguity.get("analyses"), list):
+        for index, item in enumerate(ambiguity["analyses"]):
+            if not isinstance(item, dict):
+                continue
+            path = f"{location}.ambiguity.analyses[{index}]"
+            for ref_field in ("attachment", "target", "constituent", "clause"):
+                if ref_field in item:
+                    require(item.get(ref_field), {"word", "constituent", "clause"}, f"{path}.{ref_field}")
+            for link_field in ("wrapper_ids", "constituent_ids", "clause_refs"):
+                for link_index, link in enumerate(item.get(link_field, []) if isinstance(item.get(link_field), list) else []):
+                    if link not in objects:
+                        _error(errors, f"{path}.{link_field}[{link_index}]", "ambiguity linkage targets a node omitted from the projection")
+            for link_index, link in enumerate(item.get("relation_ids", []) if isinstance(item.get("relation_ids"), list) else []):
+                if link not in relation_ids:
+                    _error(errors, f"{path}.relation_ids[{link_index}]", "ambiguity linkage targets a relation omitted from the projection")
 
 
 def _is_v2(record: dict[str, Any]) -> bool:
@@ -666,6 +833,7 @@ def validate_record(record: Any, location: str, schema_path: Path | None = None)
                         leaks = _rendered_governance_leaks(payload)
                         if leaks:
                             _error(errors, f"{location}.messages[2].content", f"assistant projection contains governance-only fields at {leaks}")
+                        _validate_rendered_references(payload, f"{location}.messages[2].content", errors)
         return errors
     _validate_json_schema(record, location, errors, schema_path)
     missing = REQUIRED - record.keys()

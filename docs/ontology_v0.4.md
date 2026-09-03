@@ -86,9 +86,27 @@ empty set, not the same as an unannotated field.
 
 ## Rendering and governance
 
-The default renderer projects an explicit linguistic-field allowlist. It
-honors coverage: omitted/unannotated dimensions are absent from the assistant
-payload, while annotated empty dimensions remain present. Governance metadata
+The default renderer projects an explicit linguistic-field allowlist at field
+and property level. It resolves coverage for each target through the shared
+coverage resolver: complete and confirmed-empty targets are rendered,
+partial-covered targets contribute only their covered subset, and
+partial-uncovered, omitted, unannotated, and out-of-scope targets contribute no
+supervision. A physical constituent can therefore retain `id`/`span` and a
+covered `function` while omitting an uncovered `phrase_category`, or retain
+covered internal NP structure for one node while suppressing another node's
+omitted internal structure. When a covered relation needs an otherwise
+uncovered node, the renderer may retain a minimal structural shell (`id`,
+`node_kind`, and `span`, plus only the reference property required to connect
+the relation); node IDs are reference infrastructure, not governance data.
+The implementation keeps an explicit dimension-to-field/property map: clause
+structure projects clause fields, phrase/NP constituency projects constituent
+structure, syntactic function projects `function` (and only the necessary
+wrapper references), lexical category projects word categories, and dependency,
+role, valency, and typed/construction relations project their own relation
+collections. A top-level array is never used as a proxy for all of its
+properties.
+Missing or unannotated data is never emitted as an empty collection: only an
+explicit confirmed-empty declaration renders `[]`. Governance metadata
 (`review_metadata`, migration flags, ids, split, provenance, and future
 governance fields) stays in `governance_sidecar` and is not rendered as target
 supervision. The default rendering mode omits unresolved lexical candidate
