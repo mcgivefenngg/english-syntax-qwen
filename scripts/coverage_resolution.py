@@ -17,6 +17,17 @@ class CoverageState(str, Enum):
     CONFIRMED_EMPTY = "confirmed_empty"
 
 
+@dataclass(frozen=True)
+class ScoringEligibility:
+    scoreable: bool
+    coverage_state: CoverageState | None
+    reason: str
+
+    @property
+    def state(self) -> CoverageState | None:
+        return self.coverage_state
+
+
 class CoverageResolutionError(ValueError):
     """Raised when invalid declarations cannot produce one coverage state."""
 
@@ -260,3 +271,41 @@ def resolve_coverage(
     if record_entries:
         return _collapse_states(record_entries, partial_is_covered=False)
     return CoverageState.UNANNOTATED
+
+
+_SCOREABLE_COVERAGE_STATES = frozenset({
+    CoverageState.COMPLETE,
+    CoverageState.CONFIRMED_EMPTY,
+    CoverageState.PARTIAL_COVERED,
+})
+
+_SCORING_REASONS = {
+    CoverageState.COMPLETE: "complete coverage is scoreable",
+    CoverageState.CONFIRMED_EMPTY: "confirmed empty coverage is scoreable",
+    CoverageState.PARTIAL_COVERED: "partial coverage explicitly covers this target",
+    CoverageState.PARTIAL_UNCOVERED: "partial coverage does not cover this target; absence is not negative gold",
+    CoverageState.OMITTED: "coverage is omitted; absence is not negative gold",
+    CoverageState.UNANNOTATED: "coverage is unannotated; absence is not negative gold",
+    CoverageState.OUT_OF_SCOPE: "target is out of scope; absence is not negative gold",
+}
+
+
+def resolve_scoring_eligibility(
+    record: dict[str, Any],
+    dimension: str,
+    target: str | None = None,
+) -> ScoringEligibility:
+    """Resolve coverage once and return the corresponding scoring decision."""
+    try:
+        state = resolve_coverage(record, dimension, target)
+    except CoverageResolutionError:
+        return ScoringEligibility(
+            scoreable=False,
+            coverage_state=None,
+            reason="coverage resolution failed; scoring is disabled",
+        )
+    return ScoringEligibility(
+        scoreable=state in _SCOREABLE_COVERAGE_STATES,
+        coverage_state=state,
+        reason=_SCORING_REASONS[state],
+    )

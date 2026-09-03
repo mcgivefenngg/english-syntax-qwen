@@ -73,11 +73,16 @@ coordination, or semantic-role taxonomies.
 Coverage keys are `(dimension, scope)`, where scope identifies a record, node,
 or token region. The same dimension can be complete for one node and
 intentionally omitted for another. The same dimension+scope cannot have
-contradictory declarations. `complete` is normally scoreable; `partial` is
-scoreable only for its explicitly named covered node/region; `unannotated`,
-`omitted`, and `out_of_scope` completeness (or an intentional omission) is not
-scoreable. An annotated empty list is
-evidence of a confirmed empty set, not the same as an unannotated field.
+contradictory declarations. Coverage resolution and scoring eligibility are
+separate: `complete` and `confirmed_empty` are scoreable, while `partial` is
+scoreable only for its explicitly named covered node/region. The resolved
+states `partial_uncovered`, `unannotated`, `omitted`, and `out_of_scope` are not
+scoreable. For `partial_uncovered`, `unannotated`, `omitted`, and
+`out_of_scope`, missing data is never negative gold, so a prediction cannot be
+penalized solely because its corresponding gold item is absent. Scoring
+eligibility is resolved for each `(dimension, target)`, not for an entire
+record or top-level field. An annotated empty list is evidence of a confirmed
+empty set, not the same as an unannotated field.
 
 ## Rendering and governance
 

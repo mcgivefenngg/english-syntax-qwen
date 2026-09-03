@@ -41,12 +41,12 @@ except ImportError:
 try:
     from coverage_resolution import (
         CoverageResolutionError, CoverageState, coverage_declaration_issues,
-        coverage_scope_key, resolve_coverage,
+        coverage_scope_key, resolve_coverage, resolve_scoring_eligibility,
     )
 except ImportError:
     from scripts.coverage_resolution import (
         CoverageResolutionError, CoverageState, coverage_declaration_issues,
-        coverage_scope_key, resolve_coverage,
+        coverage_scope_key, resolve_coverage, resolve_scoring_eligibility,
     )
 
 
@@ -620,15 +620,7 @@ def _validate_coverage(record: dict[str, Any], location: str, errors: list[str])
 
 def coverage_allows_score(record: dict[str, Any], dimension: str, target: str | None = None) -> bool:
     """Return whether a requested dimension/target is declared scorable."""
-    try:
-        state = resolve_coverage(record, dimension, target)
-    except CoverageResolutionError:
-        return False
-    return state in {
-        CoverageState.COMPLETE,
-        CoverageState.PARTIAL_COVERED,
-        CoverageState.CONFIRMED_EMPTY,
-    }
+    return resolve_scoring_eligibility(record, dimension, target).scoreable
 
 
 def validate_record(record: Any, location: str, schema_path: Path | None = None) -> list[str]:

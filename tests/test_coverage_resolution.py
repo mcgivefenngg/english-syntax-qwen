@@ -5,8 +5,14 @@ import itertools
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
-from scripts.coverage_resolution import CoverageState, resolve_coverage
+from scripts.coverage_resolution import (
+    CoverageState,
+    ScoringEligibility,
+    resolve_coverage,
+    resolve_scoring_eligibility,
+)
 from scripts.data_common import read_jsonl
 from scripts.validate_dataset import coverage_allows_score, validate_record
 
@@ -170,6 +176,75 @@ class CoverageResolutionTests(unittest.TestCase):
         record = with_dimensions(declaration({"kind": "record"}, "partial"))
         self.assertIs(resolve_coverage(record, DIMENSION, "obj"), CoverageState.PARTIAL_UNCOVERED)
         self.assertFalse(coverage_allows_score(record, DIMENSION, "obj"))
+
+    def test_scoring_eligibility_state_matrix(self) -> None:
+        cases = (
+            (declaration({"kind": "record"}, "complete"), None, CoverageState.COMPLETE, True),
+            (declaration({"kind": "record"}, "complete", evidence="empty", dimension="dependencies"), None, CoverageState.CONFIRMED_EMPTY, True),
+            (declaration({"kind": "node", "node": "subj"}, "partial"), "subj", CoverageState.PARTIAL_COVERED, True),
+            (declaration({"kind": "record"}, "partial"), "obj", CoverageState.PARTIAL_UNCOVERED, False),
+            (declaration({"kind": "record"}, "omitted", "intentional", "unannotated"), None, CoverageState.OMITTED, False),
+            (declaration({"kind": "record"}, "unannotated", "intentional", "unannotated"), None, CoverageState.UNANNOTATED, False),
+            (declaration({"kind": "record"}, "out_of_scope", "not_applicable", "unannotated"), None, CoverageState.OUT_OF_SCOPE, False),
+        )
+        for entry, target, state, scoreable in cases:
+            with self.subTest(state=state):
+                record = with_dimensions(entry)
+                decision = resolve_scoring_eligibility(record, entry["dimension"], target)
+                self.assertIs(decision.coverage_state, state)
+                self.assertIs(decision.state, state)
+                self.assertEqual(decision.scoreable, scoreable)
+                self.assertTrue(decision.reason)
+
+    def test_subject_and_object_have_independent_scoring_eligibility(self) -> None:
+        record = with_dimensions(
+            declaration({"kind": "node", "node": "subj"}, "complete"),
+            declaration({"kind": "node", "node": "obj"}, "omitted", "intentional", "unannotated"),
+        )
+        subject = resolve_scoring_eligibility(record, DIMENSION, "subj")
+        object_ = resolve_scoring_eligibility(record, DIMENSION, "obj")
+        self.assertTrue(subject.scoreable)
+        self.assertIs(subject.coverage_state, CoverageState.COMPLETE)
+        self.assertFalse(object_.scoreable)
+        self.assertIs(object_.coverage_state, CoverageState.OMITTED)
+
+    def test_node_specific_partial_coverage_only_scores_that_target(self) -> None:
+        record = with_dimensions(
+            declaration({"kind": "node", "node": "subj"}, "partial"),
+        )
+        covered = resolve_scoring_eligibility(record, DIMENSION, "subj")
+        uncovered = resolve_scoring_eligibility(record, DIMENSION, "obj")
+        self.assertTrue(covered.scoreable)
+        self.assertIs(covered.coverage_state, CoverageState.PARTIAL_COVERED)
+        self.assertFalse(uncovered.scoreable)
+        self.assertIs(uncovered.coverage_state, CoverageState.UNANNOTATED)
+
+    def test_coverage_allows_score_delegates_to_authoritative_decision(self) -> None:
+        decision = ScoringEligibility(
+            scoreable=True,
+            coverage_state=CoverageState.OMITTED,
+            reason="test decision",
+        )
+        record = with_dimensions(declaration({"kind": "record"}, "omitted", "intentional", "unannotated"))
+        with patch("scripts.validate_dataset.resolve_scoring_eligibility", return_value=decision) as resolver:
+            self.assertTrue(coverage_allows_score(record, DIMENSION, "subj"))
+        resolver.assert_called_once_with(record, DIMENSION, "subj")
+
+    def test_scoring_eligibility_is_declaration_order_independent(self) -> None:
+        entries = [
+            declaration({"kind": "record"}, "partial"),
+            declaration({"kind": "region", "start": 0, "end": 5}, "omitted", "intentional", "unannotated"),
+            declaration({"kind": "region", "start": 0, "end": 2}, "complete"),
+            declaration({"kind": "node", "node": "subj"}, "partial"),
+        ]
+        decisions = {
+            resolve_scoring_eligibility(with_dimensions(*permutation), DIMENSION, "subj")
+            for permutation in itertools.permutations(entries)
+        }
+        self.assertEqual(
+            {(decision.scoreable, decision.coverage_state) for decision in decisions},
+            {(True, CoverageState.PARTIAL_COVERED)},
+        )
 
     def test_invalid_node_scope_reference_is_rejected(self) -> None:
         record = with_dimensions(
