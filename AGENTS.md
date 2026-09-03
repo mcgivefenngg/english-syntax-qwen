@@ -43,7 +43,7 @@
 - `tests/`：`test_data_pipeline.py`、`test_ontology_v031.py`、`test_ontology_v04.py` 及其相邻回归覆盖。
 - `README.md`、`pyproject.toml`、`uv.lock`：环境、命令、依赖和仓库布局。
 
-`AGENTS.md` 不覆盖上述文件中的详细 contract；出现冲突时，遵循当前 task 适用的 schema、ontology 和代码实现。
+对于 wire/data-shape contract，以当前 schema 为准；对于 linguistic policy，以当前 ontology/annotation docs 为准；implementation code 必须实现这些 contracts。若代码与 governing docs/schema 冲突，应视为需要调查的不一致，不得静默选择其中一方。
 `docs/open_questions.md` 中的问题仍是 unresolved。除非当前 task 明确要求 linguistic adjudication，否则不要偷偷解决、改写为 resolved 或提升为 canonical gold。
 
 ## Core linguistic invariants
@@ -78,11 +78,12 @@
 
 `eval/benchmark_v1.jsonl` 是 held-out evaluation data，不是训练语料。
 
-- benchmark 不得进入 normal training、validation、reviewed 或 generated seed 路径。
+- benchmark 可以且应接受独立的 linguistic review/adjudication；这不改变其 evaluation-only 身份。
+- benchmark 不得进入 normal training、training validation、generated seed 或任何 training-derived data path。
 - 不得从 benchmark 做浅层 lexical substitution、明显 paraphrase 或同构复制后加入训练。
 - 不得自动把 benchmark 升级为 `approved_for_training` 或 `canonical_gold`。
 - migration、cleanup 或 rendering 不得静默改变 benchmark 的 sentence wording。
-- `structural validation != linguistic gold`；通过 schema/validator 不等于语言学裁决或训练批准。
+- benchmark 的 schema/structural validation 仍然允许且必须执行；`structural validation != linguistic gold`，通过 schema/validator 不等于语言学裁决或训练批准。
 - 发布训练或生成数据前，按 `eval/benchmark/README.md` 运行 contamination 检查。
 
 ## Coverage contract
