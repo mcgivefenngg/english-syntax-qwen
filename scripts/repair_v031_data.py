@@ -136,10 +136,10 @@ def repair_record(record: dict[str, Any]) -> dict[str, Any]:
             dimensions.append({"dimension": dimension, "scope": {"kind": "record"}, "completeness": "partial", "omission": "none", "evidence": "present"})
     if "semantic_roles" in record.get("capability_tags", []) and "semantic_roles" not in {entry.get("dimension") for entry in dimensions}:
         record.setdefault("semantic_roles", [])
-        dimensions.append({"dimension": "semantic_roles", "scope": {"kind": "record"}, "completeness": "partial", "omission": "none", "evidence": "empty"})
+        dimensions.append({"dimension": "semantic_roles", "scope": {"kind": "record"}, "completeness": "partial", "omission": "intentional", "evidence": "unannotated"})
     if "lexical_valency" in record.get("capability_tags", []) and "lexical_valency" not in {entry.get("dimension") for entry in dimensions}:
         record.setdefault("lexical_valency", [])
-        dimensions.append({"dimension": "lexical_valency", "scope": {"kind": "record"}, "completeness": "partial", "omission": "none", "evidence": "empty"})
+        dimensions.append({"dimension": "lexical_valency", "scope": {"kind": "record"}, "completeness": "partial", "omission": "intentional", "evidence": "unannotated"})
     if not any(entry.get("dimension") == "dependencies" for entry in dimensions):
         dimensions.append({"dimension": "dependencies", "scope": {"kind": "record"}, "completeness": "partial", "omission": "intentional", "evidence": "unannotated" if record.get("dependencies") == [] else "present"})
     record["annotation_scope"] = {

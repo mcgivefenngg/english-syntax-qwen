@@ -82,7 +82,15 @@ scoreable. For `partial_uncovered`, `unannotated`, `omitted`, and
 penalized solely because its corresponding gold item is absent. Scoring
 eligibility is resolved for each `(dimension, target)`, not for an entire
 record or top-level field. An annotated empty list is evidence of a confirmed
-empty set, not the same as an unannotated field.
+empty set, not the same as an unannotated field. For collection-like
+dimensions, evidence `present` means that the covered collection contains one
+or more authoritative items; evidence `empty` means that the covered
+collection is confirmed empty; and evidence `unannotated` means that the
+dimension was not annotated for that scope. An intentionally omitted scope is
+also excluded from authoritative supervision and is not converted to a
+confirmed empty set. These evidence states must agree with the canonical
+collection content at their declared scope: absence of annotation is not
+negative gold.
 
 ## Rendering and governance
 

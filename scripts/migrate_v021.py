@@ -121,11 +121,22 @@ def _migrate_constituent(constituent: dict[str, Any], clauses: dict[str, dict[st
 def _migrate_scope(record: dict[str, Any]) -> None:
     old_scope = record.get("annotation_scope")
     if isinstance(old_scope, dict) and isinstance(old_scope.get("dimensions"), list) and old_scope["dimensions"]:
+        collection_fields = {
+            "dependencies": "dependencies",
+            "semantic_roles": "semantic_roles",
+            "lexical_valency": "lexical_valency",
+        }
         for entry in old_scope["dimensions"]:
             if isinstance(entry, dict) and entry.get("omission") in {"intentional", "not_applicable"}:
                 entry["evidence"] = "unannotated"
             elif isinstance(entry, dict) and "evidence" not in entry:
-                entry["evidence"] = "present"
+                field = collection_fields.get(entry.get("dimension"))
+                values = record.get(field) if field is not None else None
+                if field is not None and (not isinstance(values, list) or not values):
+                    entry["omission"] = "intentional"
+                    entry["evidence"] = "unannotated"
+                else:
+                    entry["evidence"] = "present"
         return
     if isinstance(old_scope, dict) and old_scope:
         record["legacy_annotation_scope"] = old_scope

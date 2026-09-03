@@ -740,15 +740,6 @@ def _validate_coverage(record: dict[str, Any], location: str, errors: list[str])
             _error(errors, entry_location, "omitted coverage must use evidence='unannotated' when evidence is declared")
         scope_key = (dimension, coverage_scope_key(coverage_scope))
         entries[scope_key] = entry
-        if dimension == "dependencies" and isinstance(coverage_scope, dict) and coverage_scope.get("kind") == "record":
-            dependencies = record.get("dependencies")
-            evidence = entry.get("evidence")
-            if dependencies == [] and entry.get("omission") == "none" and evidence != "empty":
-                _error(errors, entry_location, "an annotated empty dependency list requires evidence='empty'")
-            if dependencies == [] and entry.get("omission") in {"intentional", "not_applicable"} and evidence != "unannotated":
-                _error(errors, entry_location, "an unannotated empty dependency list requires evidence='unannotated'")
-            if isinstance(dependencies, list) and dependencies and evidence == "empty":
-                _error(errors, entry_location, "evidence='empty' is only valid when dependencies is empty")
     by_dimension: dict[str, list[dict[str, Any]]] = {}
     for (dimension, _), entry in entries.items():
         by_dimension.setdefault(dimension, []).append(entry)

@@ -149,6 +149,161 @@ def _regions_overlap(left: dict[str, Any], right: dict[str, Any]) -> bool:
     return max(left["start"], right["start"]) < min(left["end"], right["end"])
 
 
+_COLLECTION_DIMENSIONS: dict[str, str] = {
+    "dependencies": "dependencies",
+    "semantic_roles": "semantic_roles",
+    "lexical_valency": "lexical_valency",
+}
+
+
+def _collection_targets(record: dict[str, Any], dimension: str, item: Any) -> list[str]:
+    if not isinstance(item, dict):
+        return []
+    if dimension == "dependencies":
+        values = [item.get("head"), item.get("dependent"), item.get("source"), item.get("target")]
+        return [value for value in values if isinstance(value, str)]
+    if dimension == "semantic_roles":
+        values = [item.get("constituent"), item.get("predicate")]
+        targets = [value for value in values if isinstance(value, str)]
+        objects = _record_objects(record)
+        words = record.get("words", [])
+        predicate = item.get("predicate")
+        if isinstance(predicate, str) and predicate not in objects and isinstance(words, list):
+            targets.extend(
+                word["id"] for word in words
+                if isinstance(word, dict) and word.get("lemma") == predicate and isinstance(word.get("id"), str)
+            )
+        return targets
+    values = item.get("selected_complements", [])
+    targets = [value for value in values if isinstance(value, str)] if isinstance(values, list) else []
+    predicate = item.get("predicate")
+    objects = _record_objects(record)
+    if isinstance(predicate, str):
+        if predicate in objects:
+            targets.append(predicate)
+        else:
+            words = record.get("words", [])
+            if isinstance(words, list):
+                targets.extend(
+                    word["id"] for word in words
+                    if isinstance(word, dict) and word.get("lemma") == predicate and isinstance(word.get("id"), str)
+                )
+    return targets
+
+
+def _target_in_scope(record: dict[str, Any], target: str, scope: dict[str, Any]) -> bool:
+    kind = scope.get("kind")
+    if kind == "record":
+        return True
+    if kind == "node":
+        return target == scope.get("node")
+    target_span = _target_span(record, target)
+    start, end = scope.get("start"), scope.get("end")
+    return (
+        target_span is not None
+        and type(start) is int
+        and type(end) is int
+        and start <= target_span[0]
+        and target_span[1] <= end
+    )
+
+
+def _has_more_specific_scope(record: dict[str, Any], dimension: str, target: str, scope: dict[str, Any]) -> bool:
+    annotation_scope = record.get("annotation_scope")
+    dimensions = annotation_scope.get("dimensions", []) if isinstance(annotation_scope, dict) else []
+    if not isinstance(dimensions, list):
+        return False
+    for entry in dimensions:
+        if not isinstance(entry, dict) or entry.get("dimension") != dimension:
+            continue
+        other_scope = entry.get("scope")
+        if not isinstance(other_scope, dict) or other_scope.get("kind") == "record":
+            continue
+        if _target_in_scope(record, target, other_scope):
+            return True
+    return False
+
+
+def _collection_items_for_declaration(
+    record: dict[str, Any],
+    dimension: str,
+    entry: dict[str, Any],
+    values: list[Any],
+) -> list[Any]:
+    scope = entry.get("scope")
+    if not isinstance(scope, dict):
+        return []
+    selected: list[Any] = []
+    for item in values:
+        targets = _collection_targets(record, dimension, item)
+        if not targets:
+            if scope.get("kind") == "record":
+                selected.append(item)
+            continue
+        if scope.get("kind") == "record":
+            specific_states: list[CoverageState] = []
+            for target in targets:
+                if not _has_more_specific_scope(record, dimension, target, scope):
+                    continue
+                try:
+                    state = resolve_coverage(record, dimension, target)
+                except CoverageResolutionError:
+                    continue
+                specific_states.append(state)
+            if any(state in {CoverageState.COMPLETE, CoverageState.CONFIRMED_EMPTY, CoverageState.PARTIAL_COVERED} for state in specific_states):
+                continue
+        owned_targets: list[str] = []
+        for target in targets:
+            if not _target_in_scope(record, target, scope):
+                continue
+            if not _has_more_specific_scope(record, dimension, target, scope):
+                owned_targets.append(target)
+                continue
+            try:
+                state = resolve_coverage(record, dimension, target)
+            except CoverageResolutionError:
+                continue
+            expected = _entry_state(entry, partial_is_covered=True)
+            if expected is not None and state is expected:
+                owned_targets.append(target)
+        if owned_targets:
+            selected.append(item)
+    return selected
+
+
+def _collection_content_issues(
+    record: dict[str, Any],
+    valid_entries: list[tuple[int, dict[str, Any]]],
+) -> list[CoverageIssue]:
+    issues: list[CoverageIssue] = []
+    for index, entry in valid_entries:
+        dimension = entry.get("dimension")
+        field = _COLLECTION_DIMENSIONS.get(dimension)
+        if field is None:
+            continue
+        values = record.get(field)
+        values = values if isinstance(values, list) else []
+        owned_items = _collection_items_for_declaration(record, dimension, entry, values)
+        evidence = entry.get("evidence")
+        omission = entry.get("omission")
+        completeness = entry.get("completeness")
+        scope_label = f"{dimension} {entry.get('scope')}"
+        excluded = omission in {"intentional", "not_applicable"} or completeness in {"unannotated", "omitted", "out_of_scope"}
+        if excluded:
+            if owned_items:
+                issues.append(CoverageIssue(index, f"{scope_label} is unannotated/omitted but has authoritative collection content"))
+            continue
+        if evidence == "present":
+            if not owned_items:
+                issues.append(CoverageIssue(index, f"evidence='present' requires non-empty authoritative {field} content in the covered scope"))
+        elif evidence == "empty":
+            if owned_items:
+                issues.append(CoverageIssue(index, f"evidence='empty' requires an empty {field} collection in the covered scope"))
+        elif not owned_items:
+            issues.append(CoverageIssue(index, f"annotated empty {field} collection requires evidence='empty'"))
+    return issues
+
+
 def coverage_declaration_issues(record: dict[str, Any]) -> list[CoverageIssue]:
     """Return structural declaration issues used by dataset validation."""
     annotation_scope = record.get("annotation_scope")
@@ -200,6 +355,7 @@ def coverage_declaration_issues(record: dict[str, Any]) -> list[CoverageIssue]:
                         right_index,
                         f"overlapping peer regions have contradictory coverage states (peer declaration at index {left_index})",
                     ))
+    issues.extend(_collection_content_issues(record, valid_entries))
     return issues
 
 
