@@ -11,6 +11,11 @@ try:
 except ImportError:
     from scripts.dimension_registry import DIMENSION_REGISTRY, dimension_spec
 
+try:
+    from collection_contract import collection_target_ids
+except ImportError:
+    from scripts.collection_contract import collection_target_ids
+
 
 class CoverageState(str, Enum):
     COMPLETE = "complete"
@@ -173,27 +178,7 @@ _COLLECTION_DIMENSIONS: dict[str, str] = {
 
 
 def _collection_targets(record: dict[str, Any], dimension: str, item: Any) -> list[str]:
-    if not isinstance(item, dict):
-        return []
-    spec = dimension_spec(dimension)
-    if spec is None:
-        return []
-    targets = [item[field] for field in spec.target_fields if isinstance(item.get(field), str)]
-    if not targets and spec.target_fields == ("id",) and isinstance(item.get("id"), str):
-        targets.append(item["id"])
-    predicate = item.get(spec.target_lemma_field) if spec.target_lemma_field else None
-    objects = _record_objects(record)
-    if isinstance(predicate, str) and spec.target_lemma_field:
-        if predicate in objects:
-            targets.append(predicate)
-        else:
-            words = record.get("words", [])
-            if isinstance(words, list):
-                targets.extend(
-                    word["id"] for word in words
-                    if isinstance(word, dict) and word.get("lemma") == predicate and isinstance(word.get("id"), str)
-                )
-    return targets
+    return list(collection_target_ids(record, dimension, item))
 
 
 def _target_in_scope(record: dict[str, Any], target: str, scope: dict[str, Any]) -> bool:
@@ -300,7 +285,16 @@ def _collection_content_issues(
             continue
         if evidence == "present":
             if not owned_items:
-                issues.append(CoverageIssue(index, f"evidence='present' requires non-empty authoritative {field} content in the covered scope"))
+                effective_items = [
+                    item for item in values
+                    if _collection_item_coverage_state(record, dimension, item) in {
+                        CoverageState.COMPLETE,
+                        CoverageState.CONFIRMED_EMPTY,
+                        CoverageState.PARTIAL_COVERED,
+                    }
+                ]
+                if entry.get("scope", {}).get("kind") != "record" or not effective_items:
+                    issues.append(CoverageIssue(index, f"evidence='present' requires non-empty authoritative {field} content in the covered scope"))
         elif evidence == "empty":
             if owned_items:
                 issues.append(CoverageIssue(index, f"evidence='empty' requires an empty {field} collection in the covered scope"))
@@ -482,6 +476,37 @@ def resolve_coverage(
     if record_entries:
         return _collapse_states(record_entries, partial_is_covered=False)
     return CoverageState.UNANNOTATED
+
+
+def _collection_item_coverage_state(
+    record: dict[str, Any],
+    dimension: str,
+    item: Any,
+) -> CoverageState | None:
+    spec = dimension_spec(dimension)
+    if spec is None:
+        return None
+    targets = collection_target_ids(record, dimension, item)
+    if spec.allowed_scope_kinds == frozenset({"record"}):
+        try:
+            return resolve_coverage(record, dimension)
+        except CoverageResolutionError:
+            return None
+    if len(targets) != 1:
+        return None
+    try:
+        return resolve_coverage(record, dimension, targets[0])
+    except CoverageResolutionError:
+        return None
+
+
+def collection_item_coverage_state(
+    record: dict[str, Any],
+    dimension: str,
+    item: Any,
+) -> CoverageState | None:
+    """Resolve the effective coverage state for one collection item."""
+    return _collection_item_coverage_state(record, dimension, item)
 
 
 _SCOREABLE_COVERAGE_STATES = frozenset({

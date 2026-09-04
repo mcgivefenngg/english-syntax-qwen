@@ -54,6 +54,11 @@ try:
 except ImportError:
     from scripts.dimension_registry import CAPABILITY_DIMENSIONS, dimension_spec
 
+try:
+    from collection_contract import normalize_predicate_reference, predicate_reference_issue
+except ImportError:
+    from scripts.collection_contract import normalize_predicate_reference, predicate_reference_issue
+
 
 REQUIRED = {
     "schema_version", "id", "sentence", "capability_tags", "difficulty", "source_type",
@@ -242,14 +247,24 @@ def _validate_rendered_references(payload: dict[str, Any], location: str, errors
     for index, item in enumerate(payload.get("lexical_valency", []) if isinstance(payload.get("lexical_valency"), list) else []):
         if not isinstance(item, dict):
             continue
+        predicate = item.get("predicate")
+        predicate_issue = predicate_reference_issue(payload, predicate, "rendered lexical valency predicate")
+        if predicate_issue is not None:
+            _error(errors, f"{location}.lexical_valency[{index}].predicate", predicate_issue)
+        elif predicate != normalize_predicate_reference(payload, predicate):
+            _error(errors, f"{location}.lexical_valency[{index}].predicate", "rendered valency predicate must use an explicit word ID")
         for selected_index, selected in enumerate(item.get("selected_complements", []) if isinstance(item.get("selected_complements"), list) else []):
             require(selected, {"constituent", "clause"}, f"{location}.lexical_valency[{index}].selected_complements[{selected_index}]")
     for index, item in enumerate(payload.get("semantic_roles", []) if isinstance(payload.get("semantic_roles"), list) else []):
         if isinstance(item, dict):
             require(item.get("constituent"), {"constituent"}, f"{location}.semantic_roles[{index}].constituent")
             predicate = item.get("predicate")
-            if isinstance(predicate, str) and predicate in objects:
-                require(predicate, {"word"}, f"{location}.semantic_roles[{index}].predicate")
+            if predicate is not None:
+                predicate_issue = predicate_reference_issue(payload, predicate, "rendered semantic role predicate")
+                if predicate_issue is not None:
+                    _error(errors, f"{location}.semantic_roles[{index}].predicate", predicate_issue)
+                elif predicate != normalize_predicate_reference(payload, predicate):
+                    _error(errors, f"{location}.semantic_roles[{index}].predicate", "rendered semantic-role predicate must use an explicit word ID")
     for index, item in enumerate(payload.get("fusion_relations", []) if isinstance(payload.get("fusion_relations"), list) else []):
         if not isinstance(item, dict):
             continue
@@ -1292,6 +1307,9 @@ def validate_record(record: Any, location: str, schema_path: Path | None = None)
         if not isinstance(valency, dict):
             _error(errors, valency_location, "lexical valency must be an object")
             continue
+        predicate_issue = predicate_reference_issue(record, valency.get("predicate"), "lexical valency predicate")
+        if predicate_issue is not None:
+            _error(errors, f"{valency_location}.predicate", predicate_issue)
         selected = valency.get("selected_complements")
         if not isinstance(selected, list):
             _error(errors, valency_location, "selected_complements must be an array")
@@ -1408,9 +1426,10 @@ def validate_record(record: Any, location: str, schema_path: Path | None = None)
         role_constituent = role_item.get("constituent") if isinstance(role_item, dict) else None
         if not isinstance(role_item, dict) or not isinstance(role_constituent, str) or role_constituent not in ids or not _known(role_item.get("role"), SEMANTIC_ROLES):
             _error(errors, f"{location}.semantic_roles[{index}]", "semantic role must reference a constituent and use the controlled vocabulary")
-        elif isinstance(role_item.get("predicate"), str) and role_item.get("predicate") in all_ids:
-            predicate_id = role_item.get("predicate")
-            _require_ref_kind(predicate_id, objects, {"word"}, f"{location}.semantic_roles[{index}].predicate", errors, "semantic role predicate")
+        elif role_item.get("predicate") is not None:
+            predicate_issue = predicate_reference_issue(record, role_item.get("predicate"), "semantic role predicate")
+            if predicate_issue is not None:
+                _error(errors, f"{location}.semantic_roles[{index}].predicate", predicate_issue)
 
     fusion_items = record.get("fusion_relations", [])
     if fusion_items is not None:
@@ -1528,11 +1547,13 @@ def validate_record(record: Any, location: str, schema_path: Path | None = None)
         elif record.get("construction_type") is not None and record.get("construction_type") != signature["construction_type"]:
             _error(errors, location, "construction_signature construction_type must agree with construction_type")
         elif isinstance(record.get("lexical_valency"), list) and record["lexical_valency"]:
-            valency_predicates = {
-                item.get("predicate") for item in record["lexical_valency"]
-                if isinstance(item, dict) and isinstance(item.get("predicate"), str)
+            signature_predicate_id = normalize_predicate_reference(record, signature["predicate_lemma"])
+            valency_predicate_ids = {
+                normalize_predicate_reference(record, item.get("predicate"))
+                for item in record["lexical_valency"]
+                if isinstance(item, dict)
             }
-            if signature["predicate_lemma"] not in valency_predicates:
+            if signature_predicate_id is None or signature_predicate_id not in valency_predicate_ids:
                 _error(errors, location, "construction_signature predicate_lemma must agree with lexical_valency")
 
     if not isinstance(record["explanation"], str) or not record["explanation"].strip():

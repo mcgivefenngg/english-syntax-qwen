@@ -120,6 +120,15 @@ mixed record payload without such a target representation must use
 limited to the record-level collection payloads shown above; scoped empty
 assertions are not inferred from missing items.
 
+In V0.4, `dependencies` and `semantic_roles` are record-scoped collections:
+their relation endpoints are referential content, not coverage owners.
+`lexical_valency` is owned by its lexical-head word; selected complements are
+content references inside the valency item and do not grant valency coverage.
+Legacy predicate lemma or surface-form references are normalized to a word ID
+only when the match is unique. Ambiguous predicate ownership fails closed.
+Unknown or uncovered content remains unknown or omitted; it is never rewritten
+as an empty gold set.
+
 ## Rendering and governance
 
 The default renderer projects an explicit linguistic-field allowlist at field

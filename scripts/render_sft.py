@@ -10,9 +10,14 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from coverage_resolution import CoverageResolutionError, CoverageState, resolve_coverage
+    from coverage_resolution import CoverageResolutionError, CoverageState, collection_item_coverage_state, resolve_coverage
 except ImportError:
-    from scripts.coverage_resolution import CoverageResolutionError, CoverageState, resolve_coverage
+    from scripts.coverage_resolution import CoverageResolutionError, CoverageState, collection_item_coverage_state, resolve_coverage
+
+try:
+    from collection_contract import normalize_collection_item
+except ImportError:
+    from scripts.collection_contract import normalize_collection_item
 
 try:
     from data_common import read_jsonl
@@ -20,9 +25,9 @@ except ImportError:
     from scripts.data_common import read_jsonl
 
 try:
-    from dimension_registry import DIMENSION_REGISTRY, PROJECTION_FIELD_DIMENSIONS
+    from dimension_registry import DIMENSION_REGISTRY, PROJECTION_FIELD_DIMENSIONS, dimension_spec
 except ImportError:
-    from scripts.dimension_registry import DIMENSION_REGISTRY, PROJECTION_FIELD_DIMENSIONS
+    from scripts.dimension_registry import DIMENSION_REGISTRY, PROJECTION_FIELD_DIMENSIONS, dimension_spec
 
 
 DEFAULT_SYSTEM = "You are English Syntax Tutor. Distinguish lexical category, phrase category, syntactic function, semantic role, and framework-specific terminology."
@@ -96,7 +101,7 @@ _COVERED_STATES = frozenset({CoverageState.COMPLETE, CoverageState.CONFIRMED_EMP
 _REFERENCE_KEYS = frozenset({
     "head", "dependent", "parent", "clause_ref", "integration_parent", "subject", "constituent",
     "attachment", "source", "target", "clause", "fused_element", "whole_constituent", "relative_clause",
-    "selected_complements", "marker_ids", "linked_wrapper_ids", "linked_constituent_ids",
+    "selected_complements", "predicate", "marker_ids", "linked_wrapper_ids", "linked_constituent_ids",
     "linked_clause_refs", "linked_relation_ids", "constituent_ids", "clause_refs", "wrapper_ids",
 })
 
@@ -397,11 +402,21 @@ def _project_constituents(record: dict[str, Any], rendering_mode: str) -> list[d
 def _project_relation_collection(record: dict[str, Any], field: str, dimension: str, identifiers: Any, rendering_mode: str) -> list[dict[str, Any]] | None:
     record_state = _coverage_state(record, dimension)
     values = record.get(field)
+    spec = dimension_spec(dimension)
     if record_state == CoverageState.CONFIRMED_EMPTY:
         return []
     if not isinstance(values, list):
         return None
     context = {"dependencies": "dependency", "semantic_roles": "semantic_role", "heads": "head_relation"}.get(field, field)
+    if spec is not None and spec.allowed_scope_kinds == frozenset({"record"}):
+        if record_state != CoverageState.COMPLETE:
+            return None
+        result = []
+        for value in values:
+            normalized = normalize_collection_item(record, dimension, value)
+            if normalized is not None:
+                result.append(_without_governance(normalized, context, rendering_mode=rendering_mode))
+        return result or None
     if record_state == CoverageState.COMPLETE:
         return [_without_governance(item, context, rendering_mode=rendering_mode) for item in values]
     if record_state in {CoverageState.OMITTED, CoverageState.UNANNOTATED, CoverageState.OUT_OF_SCOPE, CoverageState.PARTIAL_UNCOVERED}:
@@ -433,28 +448,23 @@ def _project_heads(record: dict[str, Any], rendering_mode: str) -> list[dict[str
 
 
 def _project_valency(record: dict[str, Any], rendering_mode: str) -> list[dict[str, Any]] | None:
-    state = _coverage_state(record, "lexical_valency")
     values = record.get("lexical_valency")
-    if state == CoverageState.CONFIRMED_EMPTY:
-        return []
     if not isinstance(values, list):
         return None
     result: list[dict[str, Any]] = []
-    word_by_lemma = {item.get("lemma"): item.get("id") for item in record.get("words", []) if isinstance(item, dict)}
     for source in values:
         if not isinstance(source, dict):
             continue
-        selected = source.get("selected_complements", [])
-        targets = [value for value in selected if isinstance(value, str)]
-        predicate_id = word_by_lemma.get(source.get("predicate"))
-        if isinstance(predicate_id, str):
-            targets.append(predicate_id)
-        if state == CoverageState.COMPLETE or any(_covered(record, "lexical_valency", target) for target in targets):
-            item = _without_governance(source, "valency", rendering_mode=rendering_mode)
-            if state != CoverageState.COMPLETE and isinstance(item, dict) and isinstance(item.get("selected_complements"), list):
-                item["selected_complements"] = [target for target in item["selected_complements"] if _covered(record, "lexical_valency", target)]
-            result.append(item)
-    return result or None
+        if collection_item_coverage_state(record, "lexical_valency", source) not in _COVERED_STATES:
+            continue
+        normalized = normalize_collection_item(record, "lexical_valency", source)
+        if normalized is not None:
+            result.append(_without_governance(normalized, "valency", rendering_mode=rendering_mode))
+    if result:
+        return result
+    if _coverage_state(record, "lexical_valency") == CoverageState.CONFIRMED_EMPTY:
+        return []
+    return None
 
 
 def _project_id_list(record: dict[str, Any], field: str, dimensions: tuple[str, ...], rendering_mode: str) -> list[str] | None:
