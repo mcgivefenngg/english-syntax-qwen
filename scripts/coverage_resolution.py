@@ -78,6 +78,37 @@ def _record_objects(record: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return objects
 
 
+def _record_identity_issues(record: dict[str, Any]) -> list[str]:
+    seen: dict[str, str] = {}
+    issues: list[str] = []
+    for collection in ("words", "constituents", "clauses"):
+        values = record.get(collection, [])
+        if not isinstance(values, list):
+            continue
+        for index, item in enumerate(values):
+            if not isinstance(item, dict) or not isinstance(item.get("id"), str) or not item["id"]:
+                continue
+            identifier = item["id"]
+            location = f"{collection}[{index}]"
+            previous = seen.get(identifier)
+            if previous is not None:
+                issues.append(f"duplicate canonical object id {identifier!r} ({previous} and {location})")
+            else:
+                seen[identifier] = location
+    return issues
+
+
+def _record_object(record: dict[str, Any], target: str) -> tuple[str, dict[str, Any]] | None:
+    for collection in ("words", "constituents", "clauses"):
+        values = record.get(collection, [])
+        if not isinstance(values, list):
+            continue
+        for item in values:
+            if isinstance(item, dict) and item.get("id") == target:
+                return collection, item
+    return None
+
+
 def _target_exists(record: dict[str, Any], target: str) -> bool:
     if not isinstance(target, str) or not target:
         return False
@@ -85,13 +116,18 @@ def _target_exists(record: dict[str, Any], target: str) -> bool:
 
 
 def _target_span(record: dict[str, Any], target: str) -> tuple[int, int] | None:
+    object_entry = _record_object(record, target)
+    if object_entry is None:
+        return None
+    collection, target_object = object_entry
     words = record.get("words", [])
-    if isinstance(words, list):
-        for index, word in enumerate(words):
-            if isinstance(word, dict) and word.get("id") == target:
-                return index, index + 1
-    target_object = _record_objects(record).get(target)
-    if not isinstance(target_object, dict):
+    if collection == "words":
+        if isinstance(words, list):
+            for index, word in enumerate(words):
+                if word is target_object:
+                    return index, index + 1
+        return None
+    if target_object.get("node_kind") not in {"phrase", "clause"}:
         return None
     span = target_object.get("span")
     if not isinstance(span, dict) or type(span.get("start")) is not int or type(span.get("end")) is not int:
@@ -99,6 +135,11 @@ def _target_span(record: dict[str, Any], target: str) -> tuple[int, int] | None:
     token_count = len(words) if isinstance(words, list) else 0
     if span["start"] < 0 or span["end"] <= span["start"] or span["end"] > token_count:
         return None
+    if span["end"] <= token_count and isinstance(words[span["end"] - 1], dict):
+        ends_with_punctuation = words[span["end"] - 1].get("lexical_category") == "punctuation"
+        is_main_clause = collection == "clauses" and target_object.get("clause_category") == "main_clause"
+        if ends_with_punctuation and not is_main_clause:
+            return None
     return span["start"], span["end"]
 
 
@@ -235,7 +276,23 @@ def _dimension_entry_issue(
         if not isinstance(node_kind, str) or not spec.allows_node(node_kind):
             expected = ", ".join(sorted(spec.allowed_node_kinds))
             return f"dimension {dimension!r} node scope must reference {expected} node(s)"
+    completeness = entry.get("completeness")
+    omission = entry.get("omission")
     evidence = entry.get("evidence")
+    if completeness not in {"complete", "partial", "unannotated", "omitted", "out_of_scope"}:
+        return "coverage completeness must be complete, partial, unannotated, omitted, or out_of_scope"
+    if omission not in {"none", "intentional", "not_applicable"}:
+        return "coverage omission must be none, intentional, or not_applicable"
+    if omission == "none" and evidence is None:
+        return "annotated coverage requires explicit evidence"
+    if omission == "none" and evidence == "unannotated":
+        return "unannotated evidence requires omission intentional or not_applicable"
+    if completeness in {"unannotated", "omitted", "out_of_scope"} and omission == "none":
+        return "unannotated/omitted/out_of_scope completeness cannot use omission='none'"
+    if completeness == "complete" and omission in {"intentional", "not_applicable"}:
+        return "complete coverage cannot be marked intentionally omitted or not applicable"
+    if omission in {"intentional", "not_applicable"} and evidence not in {None, "unannotated"}:
+        return "omitted coverage must use evidence='unannotated' when evidence is declared"
     if evidence is not None and evidence not in spec.allowed_evidence_modes:
         return f"dimension {dimension!r} does not support evidence={evidence!r}"
     if evidence == "empty":
@@ -251,8 +308,8 @@ def _dimension_entry_issue(
     return None
 
 
-def coverage_declaration_issues(record: dict[str, Any]) -> list[CoverageIssue]:
-    """Return structural declaration issues used by dataset validation."""
+def coverage_declaration_issues(record: dict[str, Any], dimension: str | None = None) -> list[CoverageIssue]:
+    """Return shared H2 declaration/content issues for validation and resolution."""
     annotation_scope = record.get("annotation_scope")
     dimensions = annotation_scope.get("dimensions", []) if isinstance(annotation_scope, dict) else []
     if not isinstance(dimensions, list):
@@ -263,17 +320,20 @@ def coverage_declaration_issues(record: dict[str, Any]) -> list[CoverageIssue]:
     issues: list[CoverageIssue] = []
     valid_entries: list[tuple[int, dict[str, Any]]] = []
     exact_scopes: dict[tuple[str, tuple[Any, ...]], tuple[int, dict[str, Any]]] = {}
+    requested_dimension = dimension
     for index, entry in enumerate(dimensions):
         if not isinstance(entry, dict) or not isinstance(entry.get("dimension"), str):
             continue
-        dimension = entry["dimension"]
+        entry_dimension = entry["dimension"]
+        if requested_dimension is not None and requested_dimension != entry_dimension:
+            continue
         scope = entry.get("scope")
         issue = _dimension_entry_issue(record, entry, objects, token_count)
         if issue is not None:
             issues.append(CoverageIssue(index, issue))
             continue
         valid_entries.append((index, entry))
-        identity = (dimension, coverage_scope_key(scope))
+        identity = (entry_dimension, coverage_scope_key(scope))
         previous = exact_scopes.get(identity)
         if previous is not None:
             if _semantic_key(previous[1]) == _semantic_key(entry):
@@ -324,12 +384,12 @@ def _collapse_states(
     return next(iter(states))
 
 
-def resolve_coverage(
+def declared_coverage_state(
     record: dict[str, Any],
     dimension: str,
     target: str | None = None,
 ) -> CoverageState:
-    """Resolve by exact node, containment-minimal region, then record scope."""
+    """Resolve declaration precedence without validating payload content."""
     if dimension_spec(dimension) is None:
         raise CoverageResolutionError(f"unknown coverage dimension {dimension!r}")
     annotation_scope = record.get("annotation_scope")
@@ -342,15 +402,12 @@ def resolve_coverage(
         and entry.get("dimension") == dimension
         and isinstance(entry.get("scope"), dict)
     ]
-    objects = _record_objects(record)
-    token_count = len(record.get("words", [])) if isinstance(record.get("words"), list) else 0
-    for entry in entries:
-        issue = _dimension_entry_issue(record, entry, objects, token_count)
-        if issue is not None:
-            raise CoverageResolutionError(issue)
     if target is not None:
         if not _target_exists(record, target):
             raise CoverageResolutionError("coverage target must reference a known word, constituent, or clause")
+        target_span = _target_span(record, target)
+        if target_span is None:
+            raise CoverageResolutionError("coverage target span cannot be resolved")
         node_entries = [
             entry for entry in entries
             if entry["scope"].get("kind") == "node" and entry["scope"].get("node") == target
@@ -358,9 +415,6 @@ def resolve_coverage(
         if node_entries:
             return _collapse_states(node_entries, partial_is_covered=True)
 
-        target_span = _target_span(record, target)
-        if target_span is None:
-            raise CoverageResolutionError("coverage target span cannot be resolved")
         target_start, target_end = target_span
         regions = [
             entry for entry in entries
@@ -386,6 +440,26 @@ def resolve_coverage(
     if record_entries:
         return _collapse_states(record_entries, partial_is_covered=False)
     return CoverageState.UNANNOTATED
+
+
+def resolve_coverage(
+    record: dict[str, Any],
+    dimension: str,
+    target: str | None = None,
+) -> CoverageState:
+    """Resolve by exact node, containment-minimal region, then record scope."""
+    if not isinstance(record, dict):
+        raise CoverageResolutionError("coverage record must be an object")
+    if dimension_spec(dimension) is None:
+        raise CoverageResolutionError(f"unknown coverage dimension {dimension!r}")
+    identity_issues = _record_identity_issues(record)
+    if identity_issues:
+        raise CoverageResolutionError(identity_issues[0])
+    issues = coverage_declaration_issues(record, dimension)
+    if issues:
+        issue = issues[0]
+        raise CoverageResolutionError(f"{issue.message} (declaration index {issue.index})")
+    return declared_coverage_state(record, dimension, target)
 
 
 def _collection_item_coverage_state(

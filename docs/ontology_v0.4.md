@@ -99,6 +99,12 @@ dimension declares its payload family and properties in the executable registry,
 and typed payload contributes only to the dimension that owns its relation type.
 Where confirmed-empty is supported, it is explicit positive gold and cannot
 coexist with authoritative payload owned by that dimension and scope.
+The coverage resolver independently enforces this H2 semantic boundary, so
+caller prevalidation is not required for coverage safety: invalid evidence or
+payload cannot become positive scoring state. Exact-node resolution also
+requires a valid canonical structural identity, including a usable span for
+phrase and clause nodes. Annotated declarations (`omission: "none"`) must state
+their evidence explicitly.
 
 The executable dimension registry is the V0.4 scope/evidence contract. The
 table below summarizes its stable capabilities; it does not replace the typed

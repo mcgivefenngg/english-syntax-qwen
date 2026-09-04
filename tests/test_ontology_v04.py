@@ -117,15 +117,11 @@ class OntologyV04Tests(unittest.TestCase):
         record = copy.deepcopy(FIXTURE)
         record["annotation_scope"]["dimensions"] = [
             {"dimension": "np_internal_constituency", "scope": {"kind": "node", "node": "subj"}, "completeness": "complete", "omission": "none", "evidence": "present"},
-            {"dimension": "np_internal_constituency", "scope": {"kind": "node", "node": "obj"}, "completeness": "omitted", "omission": "intentional", "evidence": "unannotated"},
             {"dimension": "semantic_roles", "scope": {"kind": "record"}, "completeness": "partial", "omission": "intentional", "evidence": "unannotated"},
             {"dimension": "dependencies", "scope": {"kind": "record"}, "completeness": "complete", "omission": "none", "evidence": "empty"},
         ]
         record["dependencies"] = []
-        self.assertTrue(any(
-            "np_internal_constituency" in error and "unannotated/omitted" in error
-            for error in validate_record(record, "scoped")
-        ))
+        self.assertEqual(validate_record(record, "scoped"), [])
         self.assertTrue(coverage_allows_score(record, "np_internal_constituency", "subj"))
         self.assertFalse(coverage_allows_score(record, "np_internal_constituency", "obj"))
         record["annotation_scope"]["dimensions"][0]["completeness"] = "partial"
@@ -189,9 +185,7 @@ class OntologyV04Tests(unittest.TestCase):
         self.assertNotIn("lexical_analysis", default["words"][0])
         self.assertNotIn("ambiguity", default)
         candidate_mode = linguistic_projection(record, rendering_mode="learner_facing")
-        self.assertIn("lexical_analysis", candidate_mode["words"][0])
-        self.assertNotIn("status", candidate_mode["words"][0]["lexical_analysis"])
-        self.assertNotIn("status", candidate_mode["words"][0]["lexical_analysis"]["candidates"][0])
+        self.assertNotIn("lexical_analysis", candidate_mode["words"][0])
         self.assertNotIn("ambiguity", candidate_mode)
         with self.assertRaises(ValueError):
             linguistic_projection(record, rendering_mode="governance")

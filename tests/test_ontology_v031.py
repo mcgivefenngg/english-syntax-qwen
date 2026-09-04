@@ -156,6 +156,7 @@ class OntologyV031Tests(unittest.TestCase):
             "scope": {"kind": "region", "start": 0, "end": 2},
             "completeness": "complete",
             "omission": "none",
+            "evidence": "present",
         }]
         self.assertTrue(coverage_allows_score(record, "np_internal_constituency", "subj"))
         self.assertFalse(coverage_allows_score(record, "np_internal_constituency", "obj"))

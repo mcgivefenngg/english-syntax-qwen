@@ -143,6 +143,7 @@ class CollectionProjectionContractTests(unittest.TestCase):
         record["annotation_scope"]["dimensions"].append(
             declaration("syntactic_function", {"kind": "node", "node": "obj"}, "omitted", "intentional", "unannotated")
         )
+        record["constituents"][1].pop("function", None)
         projection = linguistic_projection(record)
         self.assertEqual(projection["lexical_valency"][0]["selected_complements"], ["obj"])
 
@@ -158,7 +159,7 @@ class CollectionProjectionContractTests(unittest.TestCase):
 
     def test_valency_projection_is_declaration_order_independent(self) -> None:
         entries = [
-            declaration("lexical_valency", {"kind": "record"}, "partial"),
+            declaration("lexical_valency", {"kind": "record"}, "unannotated", "intentional", "unannotated"),
             declaration("lexical_valency", {"kind": "node", "node": "w2"}),
         ]
         forward = record_with("lexical_valency", entries[0], [VALENCY])

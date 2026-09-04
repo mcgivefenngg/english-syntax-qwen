@@ -719,18 +719,6 @@ def _validate_coverage(record: dict[str, Any], location: str, errors: list[str])
             _error(errors, entry_location, "unknown coverage dimension")
             continue
         coverage_scope = entry.get("scope")
-        if entry.get("completeness") not in {"complete", "partial", "unannotated", "omitted", "out_of_scope"}:
-            _error(errors, entry_location, "coverage completeness must be complete, partial, unannotated, omitted, or out_of_scope")
-        if entry.get("omission") not in {"none", "intentional", "not_applicable"}:
-            _error(errors, entry_location, "coverage omission must be none, intentional, or not_applicable")
-        if entry.get("omission") == "none" and entry.get("evidence") == "unannotated":
-            _error(errors, entry_location, "unannotated evidence requires omission intentional or not_applicable")
-        if entry.get("completeness") in {"unannotated", "omitted", "out_of_scope"} and entry.get("omission") == "none":
-            _error(errors, entry_location, "unannotated/omitted/out_of_scope completeness cannot use omission='none'")
-        if entry.get("completeness") == "complete" and entry.get("omission") in {"intentional", "not_applicable"}:
-            _error(errors, entry_location, "complete coverage cannot be marked intentionally omitted or not applicable")
-        if entry.get("omission") in {"intentional", "not_applicable"} and entry.get("evidence") not in {None, "unannotated"}:
-            _error(errors, entry_location, "omitted coverage must use evidence='unannotated' when evidence is declared")
         scope_key = (dimension, coverage_scope_key(coverage_scope))
         entries[scope_key] = entry
     by_dimension: dict[str, list[dict[str, Any]]] = {}

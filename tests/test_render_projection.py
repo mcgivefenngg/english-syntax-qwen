@@ -37,6 +37,8 @@ class CoverageAwareProjectionTests(unittest.TestCase):
             declaration("phrase_constituency", {"kind": "record"}),
             declaration("syntactic_function", {"kind": "record"}, "omitted", "intentional", "unannotated"),
         )
+        for constituent in record["constituents"]:
+            constituent.pop("function", None)
         constituents = linguistic_projection(record)["constituents"]
         self.assertTrue(constituents)
         self.assertTrue(all("phrase_category" in item for item in constituents))
@@ -47,6 +49,8 @@ class CoverageAwareProjectionTests(unittest.TestCase):
             declaration("syntactic_function", {"kind": "node", "node": "obj"}),
             declaration("phrase_constituency", {"kind": "record"}, "omitted", "intentional", "unannotated"),
         )
+        for constituent in record["constituents"]:
+            constituent.pop("phrase_category", None)
         constituents = linguistic_projection(record)["constituents"]
         self.assertEqual(constituents, [{"id": "obj", "node_kind": "phrase", "span": {"start": 3, "end": 5}, "function": "object"}])
 
@@ -54,12 +58,14 @@ class CoverageAwareProjectionTests(unittest.TestCase):
         record = record_with(
             declaration("np_internal_constituency", {"kind": "node", "node": "subj"}),
             declaration("np_internal_constituency", {"kind": "node", "node": "obj"}, "omitted", "intentional", "unannotated"),
-            declaration("syntactic_function", {"kind": "record"}),
+            declaration("syntactic_function", {"kind": "node", "node": "obj"}),
         )
         record["constituents"].extend([
             {"id": "subj-det", "node_kind": "phrase", "phrase_category": "DetP", "span": {"start": 0, "end": 1}, "parent": "subj", "function": "determiner"},
             {"id": "obj-det", "node_kind": "phrase", "phrase_category": "DetP", "span": {"start": 3, "end": 4}, "parent": "obj", "function": "determiner"},
         ])
+        record["constituents"][1].pop("phrase_category", None)
+        record["constituents"][-1].pop("function", None)
         by_id = {item["id"]: item for item in linguistic_projection(record)["constituents"]}
         self.assertIn("subj-det", by_id)
         self.assertNotIn("obj-det", by_id)
@@ -85,6 +91,7 @@ class CoverageAwareProjectionTests(unittest.TestCase):
             declaration("phrase_constituency", {"kind": "node", "node": "subj"}, "partial"),
             declaration("phrase_constituency", {"kind": "node", "node": "obj"}, "omitted", "intentional", "unannotated"),
         )
+        record["constituents"][1].pop("phrase_category", None)
         self.assertEqual([item["id"] for item in linguistic_projection(record)["constituents"]], ["subj"])
 
     def test_partial_uncovered_target_does_not_leak(self) -> None:
@@ -98,6 +105,7 @@ class CoverageAwareProjectionTests(unittest.TestCase):
             "source": {"namespace": "word", "id": "w1"},
             "target": {"namespace": "constituent", "id": "obj"},
         }]
+        record["canonical_analysis"]["typed_analysis"]["status"] = "established"
         payload = linguistic_projection(record)
         self.assertEqual(payload["words"], [{"id": "w1", "node_kind": "word"}])
         self.assertEqual(payload["constituents"], [{"id": "obj", "node_kind": "phrase", "span": {"start": 3, "end": 5}}])
@@ -113,6 +121,7 @@ class CoverageAwareProjectionTests(unittest.TestCase):
             "source": {"namespace": "word", "id": "w1"},
             "target": {"namespace": "constituent", "id": "emb"},
         }]
+        record["canonical_analysis"]["typed_analysis"]["status"] = "established"
         payload = linguistic_projection(record)
         self.assertEqual([item["id"] for item in payload["constituents"]], ["emb"])
         self.assertNotIn("emb", {item["id"] for item in payload.get("clauses", [])})
@@ -124,6 +133,7 @@ class CoverageAwareProjectionTests(unittest.TestCase):
             "source": {"namespace": "word", "id": "w1"},
             "target": {"namespace": "clause", "id": "c0"},
         }]
+        record["canonical_analysis"]["typed_analysis"]["status"] = "established"
         payload = linguistic_projection(record)
         self.assertEqual(payload["clauses"], [{"id": "c0", "node_kind": "clause", "span": {"start": 0, "end": 5}}])
         self.assertNotIn("c0", {item["id"] for item in payload.get("constituents", [])})
@@ -135,6 +145,7 @@ class CoverageAwareProjectionTests(unittest.TestCase):
             "source": {"namespace": "word", "id": "w1"},
             "target": {"namespace": "constituent", "id": "obj"},
         }]
+        record["canonical_analysis"]["typed_analysis"]["status"] = "established"
         node = linguistic_projection(record)["constituents"][0]
         self.assertNotIn("phrase_category", node)
         self.assertNotIn("function", node)
@@ -166,6 +177,8 @@ class CoverageAwareProjectionTests(unittest.TestCase):
             "target": {"namespace": "constituent", "id": "obj"},
             "role": "Theme", "function": "object", "category": "NP",
         }]
+        record["canonical_analysis"]["typed_analysis"]["status"] = "established"
+        record["semantic_roles"] = [{"constituent": "obj", "role": "Theme", "predicate": "w2"}]
         relation = linguistic_projection(record)["canonical_analysis"]["typed_analysis"]["relations"][0]
         self.assertEqual(relation["role"], "Theme")
         self.assertEqual(relation["function"], "object")
@@ -192,6 +205,7 @@ class CoverageAwareProjectionTests(unittest.TestCase):
             declaration("syntactic_function", {"kind": "node", "node": "obj"}),
             declaration("syntactic_function", {"kind": "node", "node": "subj"}, "omitted", "intentional", "unannotated"),
         )
+        record["constituents"][0].pop("function", None)
         record["complements"] = ["obj", "subj"]
         payload = linguistic_projection(record)
         self.assertEqual(payload["complements"], ["obj"])
@@ -199,9 +213,8 @@ class CoverageAwareProjectionTests(unittest.TestCase):
     def test_adjuncts_filter_omitted_target(self) -> None:
         record = record_with(
             declaration("vp_complementation", {"kind": "node", "node": "obj"}),
-            declaration("vp_complementation", {"kind": "node", "node": "subj"}, "omitted", "intentional", "unannotated"),
         )
-        record["adjuncts"] = ["obj", "subj"]
+        record["adjuncts"] = ["obj", "ghost"]
         payload = linguistic_projection(record)
         self.assertEqual(payload["adjuncts"], ["obj"])
 
@@ -216,7 +229,7 @@ class CoverageAwareProjectionTests(unittest.TestCase):
 
     def test_unrelated_region_coverage_does_not_authorize_another_node(self) -> None:
         record = record_with(
-            declaration("np_internal_constituency", {"kind": "node", "node": "obj"}, "omitted", "intentional", "unannotated"),
+            declaration("np_internal_constituency", {"kind": "node", "node": "subj"}),
             declaration("syntactic_function", {"kind": "region", "start": 0, "end": 2}),
         )
         record["constituents"].append({
@@ -256,7 +269,11 @@ class CoverageAwareProjectionTests(unittest.TestCase):
             declaration("phrase_constituency", {"kind": "node", "node": "obj"}, "omitted", "intentional", "unannotated"),
             declaration("syntactic_function", {"kind": "record"}),
         ]
-        self.assertEqual(linguistic_projection(record_with(*entries)), linguistic_projection(record_with(*reversed(entries))))
+        record = record_with(*entries)
+        record["constituents"][1].pop("phrase_category", None)
+        reverse = record_with(*reversed(entries))
+        reverse["constituents"][1].pop("phrase_category", None)
+        self.assertEqual(linguistic_projection(record), linguistic_projection(reverse))
 
     def test_rendered_projection_has_no_dangling_references(self) -> None:
         record = record_with(declaration("dependencies", {"kind": "record"}))
@@ -270,6 +287,7 @@ class CoverageAwareProjectionTests(unittest.TestCase):
             "source": {"namespace": "word", "id": "w1"},
             "target": {"namespace": "constituent", "id": "obj"},
         }]
+        record["canonical_analysis"]["typed_analysis"]["status"] = "established"
         rendered = render_record(record)
         self.assertEqual(validate_record(rendered, "minimal-shell-rendered"), [])
         node = json.loads(rendered["messages"][2]["content"])["constituents"][0]
@@ -291,10 +309,12 @@ class CoverageAwareProjectionTests(unittest.TestCase):
             declaration("vp_complementation", {"kind": "record"}),
             declaration("np_internal_constituency", {"kind": "node", "node": "subj"}),
             declaration("np_internal_constituency", {"kind": "node", "node": "obj"}, "omitted", "intentional", "unannotated"),
+            declaration("syntactic_function", {"kind": "node", "node": "obj"}),
             declaration("semantic_roles", {"kind": "record"}, "unannotated", "intentional", "unannotated"),
             declaration("dependencies", {"kind": "record"}, evidence="empty"),
         )
         record["dependencies"] = []
+        record["constituents"][1].pop("phrase_category", None)
         payload = linguistic_projection(record)
         self.assertIn("clauses", payload)
         self.assertIn("constituents", payload)

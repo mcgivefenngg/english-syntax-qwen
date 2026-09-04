@@ -693,10 +693,10 @@ def _declared_confirmed_empty(record: dict[str, Any], dimension: str, target: st
         return False
     try:
         try:
-            from coverage_resolution import CoverageState, resolve_coverage
+            from coverage_resolution import CoverageState, declared_coverage_state
         except ImportError:
-            from scripts.coverage_resolution import CoverageState, resolve_coverage
-        return resolve_coverage(record, dimension, target) is CoverageState.CONFIRMED_EMPTY
+            from scripts.coverage_resolution import CoverageState, declared_coverage_state
+        return declared_coverage_state(record, dimension, target) is CoverageState.CONFIRMED_EMPTY
     except (TypeError, ValueError):
         return False
 
