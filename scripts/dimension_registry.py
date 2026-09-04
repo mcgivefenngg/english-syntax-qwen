@@ -118,25 +118,41 @@ _DIMENSIONS = {
         "lexical_category", scopes={"record", "node"}, nodes={"word"},
         evidence={"present", "unannotated"}, empty_scopes=set(),
         partial_present_target_source="item_ids", payload_family="word_scalar_properties", collection_like=False,
-        payloads=(_payload("words", "lexical_category", "external_pos_tags"),), target_fields=("id",),
+        payloads=(
+            _payload("words", "lexical_category", "external_pos_tags"),
+            _payload("typed_arguments", "category"),
+            _payload("typed_relation", "category"),
+        ), target_fields=("id",),
     ),
     "phrase_constituency": _spec(
         "phrase_constituency", scopes={"record", "node", "region"}, nodes={"phrase", "clause"},
         evidence={"present", "empty", "unannotated"}, empty_scopes={"record"},
         partial_present_target_source="item_ids", payload_family="constituent_collection", collection_like=True,
-        payloads=(_payload("constituents", "id", "node_kind", "span", "phrase_category", "head", "parent", "relation_label", "span_relation"),), content_field="constituents", target_fields=("id",),
+        payloads=(
+            _payload("constituents", "id", "node_kind", "span", "phrase_category", "head", "parent", "relation_label", "span_relation"),
+            _payload("typed_arguments", "category"),
+            _payload("typed_relation", "category"),
+        ), content_field="constituents", target_fields=("id",),
     ),
     "constituency": _spec(
         "constituency", scopes={"record", "node", "region"}, nodes={"phrase", "clause"},
         evidence={"present", "empty", "unannotated"}, empty_scopes={"record"},
         partial_present_target_source="item_ids", payload_family="constituent_collection", collection_like=True,
-        payloads=(_payload("constituents", "id", "node_kind", "span", "phrase_category", "head", "parent", "relation_label", "span_relation"),), content_field="constituents", target_fields=("id",),
+        payloads=(
+            _payload("constituents", "id", "node_kind", "span", "phrase_category", "head", "parent", "relation_label", "span_relation"),
+            _payload("typed_arguments", "category"),
+            _payload("typed_relation", "category"),
+        ), content_field="constituents", target_fields=("id",),
     ),
     "np_internal_constituency": _spec(
         "np_internal_constituency", scopes={"record", "node", "region"}, nodes={"phrase"},
         evidence={"present", "unannotated"}, empty_scopes=set(),
         partial_present_target_source="item_ids", payload_family="constituent_collection", collection_like=True,
-        payloads=(_payload("constituents", "id", "node_kind", "span", "phrase_category", "head", "parent", "relation_label", "span_relation"),), target_fields=("id",),
+        payloads=(
+            _payload("constituents", "id", "node_kind", "span", "phrase_category", "head", "parent", "relation_label", "span_relation"),
+            _payload("typed_arguments", "category"),
+            _payload("typed_relation", "category"),
+        ), target_fields=("id",),
     ),
     "clause_ontology": _spec(
         "clause_ontology", scopes={"record", "node"}, nodes={"clause"},
@@ -157,6 +173,10 @@ _DIMENSIONS = {
         payloads=(
             _payload("constituents", "id", "node_kind", "span", "function", "clause_ref", "realization"),
             _payload("words", "id", "node_kind", "syntactic_function"),
+            _payload("typed_arguments", "function"),
+            _payload("typed_relation", "function"),
+            _payload("complements", "value"),
+            _payload("adjuncts", "value"),
         ), target_fields=("id",),
     ),
     "vp_complementation": _spec(
@@ -166,17 +186,31 @@ _DIMENSIONS = {
         payloads=(
             _payload("constituents", "id", "node_kind", "span", "function", "clause_ref", "realization", "head", "parent"),
             _payload("lexical_valency", "predicate", "frame", "selected_complements"),
+            _payload("typed_arguments", "target", "source", "head", "dependent", "relation", "span", "clause_ref", "constituent_ref", "word_ref", "predicate", "value", "label"),
+            _payload("typed_relation", "target", "source", "head", "dependent", "relation", "span", "clause_ref", "constituent_ref", "word_ref", "predicate", "value", "label"),
+            _payload("complements", "value"),
+            _payload("adjuncts", "value"),
         ), target_fields=("id",),
     ),
     "dependencies": _spec(
         "dependencies", scopes={"record"}, evidence={"present", "empty", "unannotated"}, empty_scopes={"record"},
         partial_present_target_source="relation_targets", payload_family="dependency_collection", collection_like=True,
-        payloads=(_payload("dependencies", "relation", "head", "dependent"),), content_field="dependencies", target_fields=("head", "dependent"),
+        payloads=(
+            _payload("dependencies", "relation", "head", "dependent"),
+            _payload("typed_analysis", "kind", "framework", "arguments", "entities", "relations"),
+            _payload("typed_arguments", "id", "kind", "type", "target", "source", "head", "dependent", "relation", "span", "clause_ref", "constituent_ref", "word_ref", "predicate", "value", "label"),
+            _payload("typed_entity", "id", "kind"),
+            _payload("typed_relation", "id", "kind", "type", "arity", "source", "target", "namespace", "framework", "head", "dependent", "relation"),
+        ), content_field="dependencies", target_fields=("head", "dependent"),
     ),
     "semantic_roles": _spec(
         "semantic_roles", scopes={"record"}, evidence={"present", "empty", "unannotated"}, empty_scopes={"record"},
         partial_present_target_source="relation_targets", payload_family="semantic_role_collection", collection_like=True,
-        payloads=(_payload("semantic_roles", "constituent", "role", "predicate"),), content_field="semantic_roles", target_fields=("constituent", "predicate"), target_lemma_field="predicate",
+        payloads=(
+            _payload("semantic_roles", "constituent", "role", "predicate"),
+            _payload("typed_arguments", "role"),
+            _payload("typed_relation", "role"),
+        ), content_field="semantic_roles", target_fields=("constituent", "predicate"), target_lemma_field="predicate",
     ),
     "lexical_valency": _spec(
         "lexical_valency", scopes={"record", "node"}, nodes={"word"},
@@ -194,11 +228,16 @@ _DIMENSIONS = {
         partial_present_target_source="record", payload_family="construction_relation_collection", collection_like=True, requires_payload_field=False,
         payloads=(
             _payload("construction_signature", "predicate_lemma", "construction_type", "argument_pattern", "function_pattern"),
+            _payload("construction_type", "value"),
+            _payload("construction_tags", "value"),
             _payload("heads", "head", "dependent", "relation"),
             _payload("complements"),
             _payload("adjuncts"),
             _payload("fusion_relations", "id", "type", "fused_element", "whole_constituent", "relative_clause", "fused_functions", "external_function", "dependency"),
             _payload("typed_analysis", "kind", "framework", "arguments", "entities", "relations"),
+            _payload("typed_arguments", "id", "kind", "type", "target", "source", "head", "dependent", "relation", "span", "clause_ref", "constituent_ref", "word_ref", "predicate", "value", "label"),
+            _payload("typed_entity", "id", "kind"),
+            _payload("typed_relation", "id", "kind", "type", "arity", "source", "target", "namespace", "framework", "head", "dependent", "relation"),
         ),
     ),
 }
@@ -241,9 +280,9 @@ PROJECTION_FIELD_DIMENSIONS: Mapping[str, tuple[str, ...]] = MappingProxyType({
     "sentence_type": ("clause_structure", "clause_ontology"),
     "sentence_type_metadata": ("clause_structure", "clause_ontology"),
     "sentence_classification": ("clause_structure", "clause_ontology"),
-    "construction_type": ("clause_structure", "vp_complementation", "construction_relations"),
-    "construction_signature": ("construction_relations", "vp_complementation", "lexical_valency"),
-    "construction_tags": ("construction_relations", "clause_structure"),
+    "construction_type": ("construction_relations",),
+    "construction_signature": ("construction_relations",),
+    "construction_tags": ("construction_relations",),
     "pedagogical_aliases": ("framework_mapping",),
     "fusion_relations": ("construction_relations",),
     "explanation": ("clause_structure", "phrase_constituency", "syntactic_function"),
@@ -259,3 +298,12 @@ def dimension_spec(dimension: object) -> DimensionSpec | None:
 
 def projection_field_dimensions(field: str) -> tuple[str, ...]:
     return PROJECTION_FIELD_DIMENSIONS.get(field, ())
+
+
+def projection_property_dimensions(field: str, property_name: str) -> tuple[str, ...]:
+    """Return the canonical dimensions that own one projected property."""
+    return tuple(
+        dimension
+        for dimension, spec in DIMENSION_REGISTRY.items()
+        if property_name in spec.property_map.get(field, frozenset())
+    )

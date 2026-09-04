@@ -150,6 +150,11 @@ wrapper references), lexical category projects word categories, and dependency,
 role, valency, and typed/construction relations project their own relation
 collections. A top-level array is never used as a proxy for all of its
 properties.
+Every rendered property has dimension-specific authority; unrelated scope
+declarations cannot authorize a target. Minimal shells preserve only typed or
+canonical reference infrastructure, remain in the collection named by that
+namespace, and must never restore uncovered linguistic truth merely to satisfy
+referential integrity.
 Missing or unannotated data is never emitted as an empty collection: only an
 explicit confirmed-empty declaration renders `[]`. Governance metadata
 (`review_metadata`, migration flags, ids, split, provenance, and future

@@ -26,6 +26,12 @@ def record_with(*entries: dict[str, Any]) -> dict[str, Any]:
 
 
 class CoverageAwareProjectionTests(unittest.TestCase):
+    def test_clause_ontology_alone_does_not_emit_unrelated_constituents(self) -> None:
+        record = record_with(declaration("clause_ontology", {"kind": "record"}))
+        payload = linguistic_projection(record)
+        self.assertIn("clauses", payload)
+        self.assertNotIn("constituents", payload)
+
     def test_covered_constituency_survives_omitted_function(self) -> None:
         record = record_with(
             declaration("phrase_constituency", {"kind": "record"}),
@@ -96,6 +102,32 @@ class CoverageAwareProjectionTests(unittest.TestCase):
         self.assertEqual(payload["words"], [{"id": "w1", "node_kind": "word"}])
         self.assertEqual(payload["constituents"], [{"id": "obj", "node_kind": "phrase", "span": {"start": 3, "end": 5}}])
 
+    def test_clause_valued_constituent_shell_stays_in_constituents(self) -> None:
+        record = record_with(declaration("construction_relations", {"kind": "record"}))
+        record["constituents"].append({
+            "id": "emb", "node_kind": "clause", "clause_ref": "c0", "span": {"start": 3, "end": 5},
+            "phrase_category": "Clause", "function": "complement",
+        })
+        record["canonical_analysis"]["typed_analysis"]["relations"] = [{
+            "id": "rel-1", "type": "cross_node", "arity": "binary",
+            "source": {"namespace": "word", "id": "w1"},
+            "target": {"namespace": "constituent", "id": "emb"},
+        }]
+        payload = linguistic_projection(record)
+        self.assertEqual([item["id"] for item in payload["constituents"]], ["emb"])
+        self.assertNotIn("emb", {item["id"] for item in payload.get("clauses", [])})
+
+    def test_true_clause_shell_stays_in_clauses(self) -> None:
+        record = record_with(declaration("construction_relations", {"kind": "record"}))
+        record["canonical_analysis"]["typed_analysis"]["relations"] = [{
+            "id": "rel-1", "type": "cross_node", "arity": "binary",
+            "source": {"namespace": "word", "id": "w1"},
+            "target": {"namespace": "clause", "id": "c0"},
+        }]
+        payload = linguistic_projection(record)
+        self.assertEqual(payload["clauses"], [{"id": "c0", "node_kind": "clause", "span": {"start": 0, "end": 5}}])
+        self.assertNotIn("c0", {item["id"] for item in payload.get("constituents", [])})
+
     def test_typed_relation_does_not_leak_omitted_node_properties(self) -> None:
         record = record_with(declaration("construction_relations", {"kind": "record"}))
         record["canonical_analysis"]["typed_analysis"]["relations"] = [{
@@ -107,6 +139,116 @@ class CoverageAwareProjectionTests(unittest.TestCase):
         self.assertNotIn("phrase_category", node)
         self.assertNotIn("function", node)
         self.assertNotIn("head", node)
+
+    def test_tokens_only_coverage_does_not_expose_typed_argument_properties(self) -> None:
+        record = record_with(declaration("tokens", {"kind": "record"}))
+        record["canonical_analysis"]["typed_analysis"]["arguments"] = [{
+            "id": "arg-1", "kind": "argument", "target": "constituent:obj",
+            "role": "Theme", "function": "object", "category": "NP",
+        }]
+        payload = linguistic_projection(record)
+        typed = payload.get("canonical_analysis", {}).get("typed_analysis", {})
+        self.assertNotIn("arguments", typed)
+        self.assertNotIn("role", json.dumps(payload))
+        self.assertNotIn("function", json.dumps(payload))
+        self.assertNotIn("category", json.dumps(payload))
+        self.assertNotIn("constituent:obj", json.dumps(payload))
+
+    def test_covered_typed_relation_retains_only_authorized_semantic_properties(self) -> None:
+        record = record_with(
+            declaration("construction_relations", {"kind": "record"}),
+            declaration("semantic_roles", {"kind": "record"}),
+            declaration("syntactic_function", {"kind": "node", "node": "obj"}),
+        )
+        record["canonical_analysis"]["typed_analysis"]["relations"] = [{
+            "id": "rel-1", "type": "cross_node", "arity": "binary",
+            "source": {"namespace": "word", "id": "w1"},
+            "target": {"namespace": "constituent", "id": "obj"},
+            "role": "Theme", "function": "object", "category": "NP",
+        }]
+        relation = linguistic_projection(record)["canonical_analysis"]["typed_analysis"]["relations"][0]
+        self.assertEqual(relation["role"], "Theme")
+        self.assertEqual(relation["function"], "object")
+        self.assertNotIn("category", relation)
+
+    def test_typed_relation_is_absent_under_empty_or_unannotated_owner(self) -> None:
+        for entry in (
+            declaration("dependencies", {"kind": "record"}, evidence="empty"),
+            declaration("dependencies", {"kind": "record"}, "unannotated", "intentional", "unannotated"),
+        ):
+            with self.subTest(entry=entry):
+                record = record_with(entry)
+                record["canonical_analysis"]["typed_analysis"]["relations"] = [{
+                    "id": "rel-1", "type": "dependency", "arity": "binary",
+                    "source": {"namespace": "word", "id": "w1"},
+                    "target": {"namespace": "constituent", "id": "obj"},
+                }]
+                payload = linguistic_projection(record)
+                typed = payload.get("canonical_analysis", {}).get("typed_analysis", {})
+                self.assertNotIn("relations", typed)
+
+    def test_complements_filter_omitted_target(self) -> None:
+        record = record_with(
+            declaration("syntactic_function", {"kind": "node", "node": "obj"}),
+            declaration("syntactic_function", {"kind": "node", "node": "subj"}, "omitted", "intentional", "unannotated"),
+        )
+        record["complements"] = ["obj", "subj"]
+        payload = linguistic_projection(record)
+        self.assertEqual(payload["complements"], ["obj"])
+
+    def test_adjuncts_filter_omitted_target(self) -> None:
+        record = record_with(
+            declaration("vp_complementation", {"kind": "node", "node": "obj"}),
+            declaration("vp_complementation", {"kind": "node", "node": "subj"}, "omitted", "intentional", "unannotated"),
+        )
+        record["adjuncts"] = ["obj", "subj"]
+        payload = linguistic_projection(record)
+        self.assertEqual(payload["adjuncts"], ["obj"])
+
+    def test_convenience_list_filtering_has_no_dangling_references(self) -> None:
+        record = record_with(
+            declaration("syntactic_function", {"kind": "node", "node": "obj"}),
+            declaration("syntactic_function", {"kind": "node", "node": "subj"}, "omitted", "intentional", "unannotated"),
+        )
+        record["complements"] = ["obj", "subj"]
+        record["adjuncts"] = ["obj", "subj"]
+        self.assertEqual(validate_record(render_record(record), "convenience-rendered"), [])
+
+    def test_unrelated_region_coverage_does_not_authorize_another_node(self) -> None:
+        record = record_with(
+            declaration("np_internal_constituency", {"kind": "node", "node": "obj"}, "omitted", "intentional", "unannotated"),
+            declaration("syntactic_function", {"kind": "region", "start": 0, "end": 2}),
+        )
+        record["constituents"].append({
+            "id": "obj-det", "node_kind": "phrase", "span": {"start": 3, "end": 4},
+            "parent": "obj", "function": "determiner", "phrase_category": "DetP",
+        })
+        payload = linguistic_projection(record)
+        self.assertNotIn("obj-det", {item["id"] for item in payload.get("constituents", [])})
+
+    def test_construction_signature_does_not_leak_through_unrelated_dimension(self) -> None:
+        record = record_with(
+            declaration("vp_complementation", {"kind": "record"}),
+            declaration("construction_relations", {"kind": "record"}, "unannotated", "intentional", "unannotated"),
+        )
+        record["construction_type"] = "transitive"
+        record["construction_tags"] = ["transitive"]
+        record["construction_signature"] = {
+            "predicate_lemma": "catalogue", "construction_type": "transitive",
+            "argument_pattern": ["Subject", "Object"], "function_pattern": ["subject", "object"],
+        }
+        payload = linguistic_projection(record)
+        self.assertNotIn("construction_type", payload)
+        self.assertNotIn("construction_tags", payload)
+        self.assertNotIn("construction_signature", payload)
+
+    def test_construction_type_and_tags_follow_construction_relation_authority(self) -> None:
+        record = record_with(declaration("construction_relations", {"kind": "record"}))
+        record["construction_type"] = "transitive"
+        record["construction_tags"] = ["transitive"]
+        payload = linguistic_projection(record)
+        self.assertEqual(payload["construction_type"], "transitive")
+        self.assertEqual(payload["construction_tags"], ["transitive"])
 
     def test_declaration_order_does_not_change_projection(self) -> None:
         entries = [
@@ -120,6 +262,18 @@ class CoverageAwareProjectionTests(unittest.TestCase):
         record = record_with(declaration("dependencies", {"kind": "record"}))
         record["dependencies"] = [{"relation": "selected", "head": "w2", "dependent": "obj"}]
         self.assertEqual(validate_record(render_record(record), "rendered"), [])
+
+    def test_minimal_shell_does_not_restore_uncovered_truth_for_validation(self) -> None:
+        record = record_with(declaration("construction_relations", {"kind": "record"}))
+        record["canonical_analysis"]["typed_analysis"]["relations"] = [{
+            "id": "rel-1", "type": "cross_node", "arity": "binary",
+            "source": {"namespace": "word", "id": "w1"},
+            "target": {"namespace": "constituent", "id": "obj"},
+        }]
+        rendered = render_record(record)
+        self.assertEqual(validate_record(rendered, "minimal-shell-rendered"), [])
+        node = json.loads(rendered["messages"][2]["content"])["constituents"][0]
+        self.assertEqual(set(node), {"id", "node_kind", "span"})
 
     def test_governance_and_adjudication_fields_are_absent(self) -> None:
         record = record_with(declaration("construction_relations", {"kind": "record"}))

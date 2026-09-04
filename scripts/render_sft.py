@@ -25,9 +25,9 @@ except ImportError:
     from scripts.data_common import read_jsonl
 
 try:
-    from dimension_registry import DIMENSION_REGISTRY, PROJECTION_FIELD_DIMENSIONS, dimension_spec
+    from dimension_registry import DIMENSION_REGISTRY, PROJECTION_FIELD_DIMENSIONS, dimension_spec, projection_property_dimensions
 except ImportError:
-    from scripts.dimension_registry import DIMENSION_REGISTRY, PROJECTION_FIELD_DIMENSIONS, dimension_spec
+    from scripts.dimension_registry import DIMENSION_REGISTRY, PROJECTION_FIELD_DIMENSIONS, dimension_spec, projection_property_dimensions
 
 
 DEFAULT_SYSTEM = "You are English Syntax Tutor. Distinguish lexical category, phrase category, syntactic function, semantic role, and framework-specific terminology."
@@ -55,7 +55,7 @@ LINGUISTIC_NESTED_FIELDS = {
     "typed_entity": {"id", "kind"},
     "typed_reference": {"namespace", "id"},
     "typed_arguments": {"id", "kind", "type", "target", "source", "head", "dependent", "relation", "role", "category", "function", "span", "clause_ref", "constituent_ref", "word_ref", "predicate", "value", "label"},
-    "typed_relation": {"id", "kind", "type", "arity", "target", "source", "namespace", "framework", "status", "note"},
+    "typed_relation": {"id", "kind", "type", "arity", "target", "source", "namespace", "framework", "role", "function", "category", "status", "note"},
     "analysis": {"label", "claims", "framework", "construction_type", "analysis_type", "typed_analysis"},
     "canonical_analysis": {"label", "claims", "framework", "construction_type", "analysis_type", "typed_analysis"},
     "preferred_analysis": {"label", "claims", "framework", "construction_type", "analysis_type", "typed_analysis"},
@@ -97,7 +97,7 @@ GOVERNANCE_FIELDS = {
 }
 LEGACY_NESTED_FIELDS = {"legacy_function", "legacy_clause_category", "legacy_pos", "status", "review_required"}
 RENDERING_MODES = {"default", "learner_facing"}
-_COVERED_STATES = frozenset({CoverageState.COMPLETE, CoverageState.CONFIRMED_EMPTY, CoverageState.PARTIAL_COVERED})
+_CONTENT_COVERED_STATES = frozenset({CoverageState.COMPLETE, CoverageState.PARTIAL_COVERED})
 _REFERENCE_KEYS = frozenset({
     "head", "dependent", "parent", "clause_ref", "integration_parent", "subject", "constituent",
     "attachment", "source", "target", "clause", "fused_element", "whole_constituent", "relative_clause",
@@ -199,25 +199,24 @@ def _coverage_state(record: dict[str, Any], dimension: str, target: str | None =
 
 
 def _covered(record: dict[str, Any], dimension: str, target: str | None = None) -> bool:
-    return _coverage_state(record, dimension, target) in _COVERED_STATES
+    return _coverage_state(record, dimension, target) in _CONTENT_COVERED_STATES
 
 
 def _any_covered(record: dict[str, Any], dimensions: tuple[str, ...], target: str | None = None) -> bool:
     return any(_covered(record, dimension, target) for dimension in dimensions)
 
 
-def _record_state(record: dict[str, Any], dimensions: tuple[str, ...]) -> CoverageState | None:
-    states = [_coverage_state(record, dimension) for dimension in dimensions]
-    for state in states:
-        if state in {CoverageState.COMPLETE, CoverageState.CONFIRMED_EMPTY}:
-            return state
-    if CoverageState.PARTIAL_COVERED in states:
-        return CoverageState.PARTIAL_COVERED
-    return next((state for state in states if state is not None), None)
+def _record_complete(record: dict[str, Any], dimensions: tuple[str, ...]) -> bool:
+    return any(_coverage_state(record, dimension) == CoverageState.COMPLETE for dimension in dimensions)
 
 
-def _record_or_target_covered(record: dict[str, Any], dimensions: tuple[str, ...], target: str) -> bool:
-    return _any_covered(record, dimensions, target)
+def _record_complete_all(record: dict[str, Any], dimensions: tuple[str, ...]) -> bool:
+    return all(_coverage_state(record, dimension) == CoverageState.COMPLETE for dimension in dimensions)
+
+
+def _property_covered(record: dict[str, Any], field: str, property_name: str, target: str | None = None) -> bool:
+    dimensions = projection_property_dimensions(field, property_name)
+    return any(_covered(record, dimension, target) for dimension in dimensions)
 
 
 def _raw_objects(record: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -298,17 +297,49 @@ def _internal_omitted(record: dict[str, Any], item: dict[str, Any]) -> bool:
     return False
 
 
+def _target_span(record: dict[str, Any], target: str) -> tuple[int, int] | None:
+    words = record.get("words")
+    if isinstance(words, list):
+        for index, word in enumerate(words):
+            if isinstance(word, dict) and word.get("id") == target:
+                return index, index + 1
+    source = _raw_objects(record).get(target)
+    span = _span(source.get("span")) if isinstance(source, dict) else None
+    return span
+
+
+def _target_in_scope(record: dict[str, Any], target: str, scope: dict[str, Any]) -> bool:
+    if scope.get("kind") == "node":
+        return scope.get("node") == target
+    if scope.get("kind") != "region":
+        return False
+    target_span = _target_span(record, target)
+    start, end = scope.get("start"), scope.get("end")
+    return (
+        target_span is not None
+        and type(start) is int
+        and type(end) is int
+        and start <= target_span[0]
+        and target_span[1] <= end
+    )
+
+
 def _explicit_nonrecord_coverage(record: dict[str, Any], dimension: str, target: str) -> bool:
     scope = record.get("annotation_scope")
     dimensions = scope.get("dimensions", []) if isinstance(scope, dict) else []
-    return any(
+    if not any(
         isinstance(entry, dict)
         and entry.get("dimension") == dimension
         and isinstance(entry.get("scope"), dict)
         and entry["scope"].get("kind") != "record"
-        and (entry["scope"].get("node") == target or entry["scope"].get("kind") == "region")
+        and _target_in_scope(record, target, entry["scope"])
+        and entry.get("completeness") in {"complete", "partial"}
+        and entry.get("omission") == "none"
+        and entry.get("evidence") != "unannotated"
         for entry in dimensions
-    )
+    ):
+        return False
+    return _covered(record, dimension, target)
 
 
 def _project_words(record: dict[str, Any], rendering_mode: str) -> list[dict[str, Any]] | None:
@@ -320,9 +351,9 @@ def _project_words(record: dict[str, Any], rendering_mode: str) -> list[dict[str
         if not isinstance(source, dict) or not isinstance(source.get("id"), str):
             continue
         identifier = source["id"]
-        token_covered = _record_or_target_covered(record, ("tokens",), identifier)
-        lexical_covered = _record_or_target_covered(record, ("lexical_category",), identifier)
-        function_covered = _record_or_target_covered(record, ("syntactic_function",), identifier)
+        token_covered = _property_covered(record, "words", "form", identifier)
+        lexical_covered = _property_covered(record, "words", "lexical_category", identifier)
+        function_covered = _property_covered(record, "words", "syntactic_function", identifier)
         item: dict[str, Any] = {"id": identifier, "node_kind": "word"}
         if token_covered:
             for key in ("form", "lemma"):
@@ -350,7 +381,7 @@ def _project_clauses(record: dict[str, Any], rendering_mode: str) -> list[dict[s
         if not isinstance(source, dict) or not isinstance(source.get("id"), str):
             continue
         identifier = source["id"]
-        covered = _record_or_target_covered(record, ("clause_structure", "clause_ontology"), identifier)
+        covered = _property_covered(record, "clauses", "finiteness", identifier)
         if not covered:
             continue
         item = {"id": identifier, "node_kind": "clause"}
@@ -370,17 +401,16 @@ def _project_constituents(record: dict[str, Any], rendering_mode: str) -> list[d
         if not isinstance(source, dict) or not isinstance(source.get("id"), str):
             continue
         identifier = source["id"]
-        phrase_covered = _any_covered(record, ("phrase_constituency", "constituency"), identifier)
+        phrase_covered = _property_covered(record, "constituents", "phrase_category", identifier)
         internal_covered = _np_internal_covered(record, source)
-        function_covered = _any_covered(record, ("syntactic_function", "vp_complementation"), identifier)
-        clause_covered = _any_covered(record, ("clause_structure", "clause_ontology"), identifier)
+        function_covered = _property_covered(record, "constituents", "function", identifier)
         omitted_internal = _internal_omitted(record, source)
         if omitted_internal and not internal_covered:
             phrase_covered = False
             internal_covered = False
             if function_covered and not _explicit_nonrecord_coverage(record, "syntactic_function", identifier):
                 function_covered = False
-        if not any((phrase_covered, internal_covered, function_covered, clause_covered)):
+        if not any((phrase_covered, internal_covered, function_covered)):
             continue
         item: dict[str, Any] = {"id": identifier, "node_kind": source.get("node_kind", "phrase")}
         if phrase_covered or internal_covered:
@@ -391,9 +421,9 @@ def _project_constituents(record: dict[str, Any], rendering_mode: str) -> list[d
             item["span"] = _without_governance(source["span"], "span", rendering_mode=rendering_mode)
         if function_covered and "function" in source:
             item["function"] = copy.deepcopy(source["function"])
-        if (function_covered or clause_covered) and "clause_ref" in source:
+        if function_covered and "clause_ref" in source:
             item["clause_ref"] = copy.deepcopy(source["clause_ref"])
-        if (function_covered or clause_covered) and "realization" in source:
+        if function_covered and "realization" in source:
             item["realization"] = _without_governance(source["realization"], "realization", rendering_mode=rendering_mode)
         result.append(item)
     return result or None
@@ -455,7 +485,7 @@ def _project_valency(record: dict[str, Any], rendering_mode: str) -> list[dict[s
     for source in values:
         if not isinstance(source, dict):
             continue
-        if collection_item_coverage_state(record, "lexical_valency", source) not in _COVERED_STATES:
+        if collection_item_coverage_state(record, "lexical_valency", source) not in _CONTENT_COVERED_STATES:
             continue
         normalized = normalize_collection_item(record, "lexical_valency", source)
         if normalized is not None:
@@ -467,16 +497,16 @@ def _project_valency(record: dict[str, Any], rendering_mode: str) -> list[dict[s
     return None
 
 
-def _project_id_list(record: dict[str, Any], field: str, dimensions: tuple[str, ...], rendering_mode: str) -> list[str] | None:
-    state = _record_state(record, dimensions)
+def _project_id_list(record: dict[str, Any], field: str, rendering_mode: str) -> list[str] | None:
     values = record.get(field)
-    if state == CoverageState.CONFIRMED_EMPTY:
-        return []
     if not isinstance(values, list):
         return None
-    if state in {CoverageState.COMPLETE, CoverageState.CONFIRMED_EMPTY}:
-        return copy.deepcopy(values)
-    filtered = [value for value in values if isinstance(value, str) and _any_covered(record, dimensions, value)]
+    dimensions = projection_property_dimensions(field, "value")
+    if not dimensions:
+        return None
+    if any(_coverage_state(record, dimension) == CoverageState.CONFIRMED_EMPTY for dimension in dimensions):
+        return []
+    filtered = [value for value in values if isinstance(value, str) and any(_covered(record, dimension, value) for dimension in dimensions)]
     return filtered or None
 
 
@@ -508,31 +538,152 @@ def _typed_relation_all_targets(relation: dict[str, Any]) -> list[str]:
     return targets
 
 
+def _typed_relation_dimension(relation: dict[str, Any]) -> str:
+    return "dependencies" if relation.get("type") == "dependency" else "construction_relations"
+
+
+def _typed_relation_is_covered(record: dict[str, Any], relation: dict[str, Any]) -> bool:
+    dimension = _typed_relation_dimension(relation)
+    state = _coverage_state(record, dimension)
+    if state == CoverageState.COMPLETE:
+        return True
+    if state == CoverageState.PARTIAL_COVERED:
+        return True
+    return any(_covered(record, dimension, target) for target in _typed_relation_targets(relation))
+
+
+def _typed_target(record: dict[str, Any], value: Any) -> tuple[str, str] | None:
+    if not isinstance(value, dict):
+        return None
+    for key in ("target", "constituent_ref", "word_ref", "clause_ref"):
+        reference = _typed_reference(value.get(key))
+        if reference and reference[0] in {"word", "constituent", "clause"}:
+            return reference
+        identifier = value.get(key)
+        if isinstance(identifier, str):
+            source = _raw_objects(record).get(identifier)
+            if isinstance(source, dict):
+                node_kind = source.get("node_kind")
+                if node_kind == "word":
+                    return "word", identifier
+                if node_kind == "clause":
+                    return "clause", identifier
+                return "constituent", identifier
+    return None
+
+
+def _typed_property_dimensions(context: str, property_name: str, target: tuple[str, str] | None) -> tuple[str, ...]:
+    if property_name == "role":
+        return projection_property_dimensions("semantic_roles", "role")
+    if property_name == "function":
+        field = "words" if target is not None and target[0] == "word" else "constituents"
+        property_name = "syntactic_function" if field == "words" else "function"
+        return projection_property_dimensions(field, property_name)
+    if property_name == "category":
+        if target is not None and target[0] == "word":
+            return projection_property_dimensions("words", "lexical_category")
+        return projection_property_dimensions("constituents", "phrase_category")
+    return projection_property_dimensions(context, property_name)
+
+
+def _typed_property_is_covered(
+    record: dict[str, Any],
+    context: str,
+    property_name: str,
+    value: dict[str, Any],
+) -> bool:
+    target = _typed_target(record, value)
+    dimensions = _typed_property_dimensions(context, property_name, target)
+    if target is None:
+        return any(_covered(record, dimension) for dimension in dimensions)
+    return any(_covered(record, dimension, target[1]) for dimension in dimensions)
+
+
+def _filter_typed_properties(
+    record: dict[str, Any],
+    value: Any,
+    context: str,
+    relation_dimension: str,
+    rendering_mode: str,
+) -> Any:
+    if isinstance(value, dict):
+        result: dict[str, Any] = {}
+        for key, item in value.items():
+            if key in {"role", "function", "category"} and not _typed_property_is_covered(record, context, key, value):
+                continue
+            if key not in {"role", "function", "category"}:
+                dimensions = projection_property_dimensions(context, key)
+                if dimensions and relation_dimension not in dimensions:
+                    continue
+            child_context = {
+                "source": "typed_reference", "target": "typed_reference",
+            }.get(key, context)
+            result[key] = _filter_typed_properties(record, item, child_context, relation_dimension, rendering_mode)
+        return result
+    if isinstance(value, list):
+        return [_filter_typed_properties(record, item, context, relation_dimension, rendering_mode) for item in value]
+    return copy.deepcopy(value)
+
+
+def _project_typed_object(
+    record: dict[str, Any],
+    value: Any,
+    context: str,
+    relation_dimension: str,
+    rendering_mode: str,
+) -> Any:
+    projected = _without_governance(value, context, rendering_mode=rendering_mode)
+    return _filter_typed_properties(record, projected, context, relation_dimension, rendering_mode)
+
+
+def _project_typed_arguments(record: dict[str, Any], value: Any, relation_dimension: str, rendering_mode: str) -> Any:
+    if isinstance(value, list):
+        return [_project_typed_object(record, item, "typed_arguments", relation_dimension, rendering_mode) for item in value]
+    if not isinstance(value, dict):
+        return None
+    argument_fields = set(LINGUISTIC_NESTED_FIELDS["typed_arguments"])
+    if any(key in argument_fields for key in value):
+        return _project_typed_object(record, value, "typed_arguments", relation_dimension, rendering_mode)
+    result = {
+        key: _project_typed_object(record, item, "typed_arguments", relation_dimension, rendering_mode)
+        for key, item in value.items()
+        if isinstance(item, dict)
+    }
+    return result or None
+
+
 def _project_typed_analysis(record: dict[str, Any], value: Any, rendering_mode: str) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
-    contexts = {"arguments": "typed_arguments", "entities": "typed_entity", "relations": "typed_relation"}
-    result = {key: _without_governance(item, contexts.get(key), rendering_mode=rendering_mode) for key, item in value.items() if key in {"kind", "framework", "arguments", "entities", "relations"}}
     relations = value.get("relations")
     projected_relations: list[dict[str, Any]] = []
     if isinstance(relations, list):
         for relation in relations:
-            if not isinstance(relation, dict):
-                continue
-            dimensions = ("dependencies",) if relation.get("type") == "dependency" else ("construction_relations",)
-            targets = _typed_relation_targets(relation)
-            if _record_state(record, dimensions) in {CoverageState.COMPLETE, CoverageState.CONFIRMED_EMPTY} or any(_any_covered(record, dimensions, target) for target in targets):
-                projected_relations.append(_without_governance(relation, "typed_relation", rendering_mode=rendering_mode))
-    if isinstance(relations, list):
+            if isinstance(relation, dict) and _typed_relation_is_covered(record, relation):
+                dimension = _typed_relation_dimension(relation)
+                projected_relations.append(_project_typed_object(record, relation, "typed_relation", dimension, rendering_mode))
+    construction_covered = _record_complete(record, ("construction_relations",))
+    analysis_dimension = "construction_relations" if construction_covered else "dependencies"
+    result: dict[str, Any] = {}
+    for key in ("kind", "framework"):
+        if key in value:
+            result[key] = copy.deepcopy(value[key])
+    if construction_covered or projected_relations:
+        if "arguments" in value and (construction_covered or projected_relations):
+            arguments = _project_typed_arguments(record, value["arguments"], analysis_dimension, rendering_mode)
+            if arguments:
+                result["arguments"] = arguments
+        if isinstance(value.get("entities"), list):
+            referenced = {target for relation in projected_relations for target in _typed_relation_all_targets(relation)}
+            entities = [
+                _project_typed_object(record, entity, "typed_entity", analysis_dimension, rendering_mode)
+                for entity in value["entities"]
+                if isinstance(entity, dict) and entity.get("id") in referenced
+            ]
+            if entities:
+                result["entities"] = entities
         if projected_relations:
             result["relations"] = projected_relations
-        else:
-            result.pop("relations", None)
-    if isinstance(result.get("entities"), list):
-        referenced = {target for relation in projected_relations for target in _typed_relation_all_targets(relation)}
-        result["entities"] = [entity for entity in result["entities"] if isinstance(entity, dict) and entity.get("id") in referenced]
-        if not result["entities"]:
-            result.pop("entities", None)
     return result or None
 
 
@@ -543,6 +694,12 @@ def _project_analysis(record: dict[str, Any], field: str, value: Any, rendering_
     if not allow_prose:
         result.pop("label", None)
         result.pop("claims", None)
+    if "framework" in result and not _record_complete(record, PROJECTION_FIELD_DIMENSIONS["framework"]):
+        result.pop("framework", None)
+    if "construction_type" in result and not _record_complete(record, PROJECTION_FIELD_DIMENSIONS["construction_type"]):
+        result.pop("construction_type", None)
+    if "analysis_type" in result and not _record_complete(record, ("construction_relations",)):
+        result.pop("analysis_type", None)
     if isinstance(value.get("typed_analysis"), dict):
         typed = _project_typed_analysis(record, value["typed_analysis"], rendering_mode)
         if typed is None:
@@ -552,20 +709,35 @@ def _project_analysis(record: dict[str, Any], field: str, value: Any, rendering_
     return result or None
 
 
-def _collect_references(value: Any) -> set[str]:
-    references: set[str] = set()
+def _reference_namespace(key: str) -> str | None:
+    return {
+        "clause_ref": "clause", "integration_parent": "clause", "relative_clause": "clause",
+        "linked_clause_refs": "clause", "clause_refs": "clause", "clause": "clause",
+        "marker_ids": "word", "fused_element": "word", "predicate": "word",
+        "linked_constituent_ids": "constituent", "linked_wrapper_ids": "constituent",
+        "constituent_ids": "constituent", "wrapper_ids": "constituent", "constituent": "constituent",
+    }.get(key)
+
+
+def _collect_references(value: Any) -> set[tuple[str | None, str]]:
+    references: set[tuple[str | None, str]] = set()
     if isinstance(value, dict):
         for key, item in value.items():
             if key in _REFERENCE_KEYS:
                 if isinstance(item, str):
                     typed = _typed_reference(item) if key in {"source", "target"} else None
-                    references.add(typed[1] if typed and typed[0] in {"word", "constituent", "clause"} else item)
+                    if typed and typed[0] in {"word", "constituent", "clause"}:
+                        references.add(typed)
+                    elif key != "linked_relation_ids":
+                        references.add((_reference_namespace(key), item))
                 elif isinstance(item, list):
-                    references.update(value for value in item if isinstance(value, str))
+                    namespace = _reference_namespace(key)
+                    if key != "linked_relation_ids":
+                        references.update((namespace, value) for value in item if isinstance(value, str))
                 elif key in {"target", "source"}:
                     reference = _typed_reference(item)
                     if reference and reference[0] in {"word", "constituent", "clause"}:
-                        references.add(reference[1])
+                        references.add(reference)
             references.update(_collect_references(item))
     elif isinstance(value, list):
         for item in value:
@@ -574,27 +746,56 @@ def _collect_references(value: Any) -> set[str]:
 
 
 def _add_reference_shells(record: dict[str, Any], projection: dict[str, Any]) -> None:
-    raw = _raw_objects(record)
-    present = {item.get("id") for field in ("words", "clauses", "constituents") for item in projection.get(field, []) if isinstance(item, dict) and isinstance(item.get("id"), str)}
-    for identifier in sorted(_collect_references(projection) - present):
-        source = raw.get(identifier)
-        if source is None:
+    collection_names = {"word": "words", "constituent": "constituents", "clause": "clauses"}
+    raw_by_namespace: dict[tuple[str, str], dict[str, Any]] = {}
+    raw_unqualified: dict[str, tuple[str, dict[str, Any]]] = {}
+    for namespace, collection in collection_names.items():
+        values = record.get(collection, [])
+        if not isinstance(values, list):
             continue
-        if source.get("node_kind") == "word":
-            shell = {"id": identifier, "node_kind": "word"}
-            projection.setdefault("words", []).append(shell)
-        elif source.get("node_kind") == "clause":
-            shell = {"id": identifier, "node_kind": "clause"}
-            if "span" in source:
-                shell["span"] = copy.deepcopy(source["span"])
-            projection.setdefault("clauses", []).append(shell)
-        else:
-            shell = {"id": identifier, "node_kind": source.get("node_kind", "phrase")}
-            if "span" in source:
-                shell["span"] = copy.deepcopy(source["span"])
-            if isinstance(source.get("clause_ref"), str):
-                shell["clause_ref"] = source["clause_ref"]
-            projection.setdefault("constituents", []).append(shell)
+        for item in values:
+            if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+                continue
+            raw_by_namespace[(namespace, item["id"])] = item
+            raw_unqualified[item["id"]] = (namespace, item)
+
+    def present_references() -> set[tuple[str, str]]:
+        return {
+            (namespace, item["id"])
+            for namespace, collection in collection_names.items()
+            for item in projection.get(collection, [])
+            if isinstance(item, dict) and isinstance(item.get("id"), str)
+        }
+
+    pending = _collect_references(projection)
+    while True:
+        present = present_references()
+        added = False
+        for namespace, identifier in sorted(pending - present, key=lambda value: (value[0] or "", value[1])):
+            source_entry = raw_by_namespace.get((namespace, identifier)) if namespace else raw_unqualified.get(identifier)
+            if source_entry is None:
+                continue
+            source_namespace, source = source_entry if namespace is None else (namespace, source_entry)
+            collection = collection_names[source_namespace]
+            if (source_namespace, identifier) in present:
+                continue
+            if source_namespace == "word":
+                shell = {"id": identifier, "node_kind": "word"}
+            elif source_namespace == "clause":
+                shell = {"id": identifier, "node_kind": "clause"}
+                if "span" in source:
+                    shell["span"] = copy.deepcopy(source["span"])
+            else:
+                shell = {"id": identifier, "node_kind": source.get("node_kind", "phrase")}
+                if "span" in source:
+                    shell["span"] = copy.deepcopy(source["span"])
+                if isinstance(source.get("clause_ref"), str):
+                    shell["clause_ref"] = source["clause_ref"]
+            projection.setdefault(collection, []).append(shell)
+            added = True
+        if not added:
+            break
+        pending = _collect_references(projection)
     for field in ("words", "clauses", "constituents"):
         if field not in projection or not isinstance(projection[field], list):
             continue
@@ -617,7 +818,7 @@ def _project_alternatives(record: dict[str, Any], projection: dict[str, Any], re
         links = []
         for field in ("linked_wrapper_ids", "linked_constituent_ids", "linked_clause_refs", "linked_relation_ids"):
             links.extend(value.get(field, []) if isinstance(value.get(field), list) else [])
-        covered = _record_state(record, ("construction_relations",)) in {CoverageState.COMPLETE, CoverageState.CONFIRMED_EMPTY} or any(isinstance(link, str) and _any_covered(record, ("construction_relations",), link) for link in links)
+        covered = _record_complete(record, ("construction_relations",)) or any(isinstance(link, str) and _any_covered(record, ("construction_relations",), link) for link in links)
         if not covered:
             continue
         item = _without_governance(value, "alternative_analysis", rendering_mode=rendering_mode)
@@ -704,11 +905,8 @@ def linguistic_projection(record: dict[str, Any], *, include_governance: bool = 
     for field, value in (("dependencies", dependencies), ("semantic_roles", semantic_roles), ("heads", heads), ("lexical_valency", valency)):
         if value is not None:
             projection[field] = value
-    for field, dimensions in {
-        "complements": ("vp_complementation", "syntactic_function"),
-        "adjuncts": ("vp_complementation", "syntactic_function"),
-    }.items():
-        value = _project_id_list(record, field, dimensions, rendering_mode)
+    for field in ("complements", "adjuncts"):
+        value = _project_id_list(record, field, rendering_mode)
         if value is not None:
             projection[field] = value
     scalar_dimensions = PROJECTION_FIELD_DIMENSIONS
@@ -716,13 +914,12 @@ def linguistic_projection(record: dict[str, Any], *, include_governance: bool = 
         if field not in record:
             continue
         if field in {"pedagogical_aliases", "fusion_relations", "ambiguity", "rejected_analyses", "error_diagnosis"}:
-            state = _record_state(record, dimensions)
-            if state not in {CoverageState.COMPLETE, CoverageState.CONFIRMED_EMPTY}:
+            if not _record_complete(record, dimensions):
                 continue
         elif field in {"explanation", "rationale"}:
-            if not all(_record_state(record, (dimension,)) in {CoverageState.COMPLETE, CoverageState.CONFIRMED_EMPTY} for dimension in dimensions):
+            if not _record_complete_all(record, dimensions):
                 continue
-        elif not _record_state(record, dimensions) in {CoverageState.COMPLETE, CoverageState.CONFIRMED_EMPTY}:
+        elif not _record_complete(record, dimensions):
             continue
         context = {
             "framework": "framework", "sentence_type_metadata": "sentence_type_metadata", "sentence_classification": "sentence_classification",
@@ -733,8 +930,8 @@ def linguistic_projection(record: dict[str, Any], *, include_governance: bool = 
     for field in ("canonical_analysis", "preferred_analysis"):
         if field in record:
             analysis_covered = bool(projection) and any(key != "sentence" for key in projection)
-            analysis_covered = analysis_covered or _record_state(record, ("construction_relations", "clause_structure", "phrase_constituency", "syntactic_function")) in {CoverageState.COMPLETE, CoverageState.CONFIRMED_EMPTY}
-            allow_prose = all(_record_state(record, (dimension,)) in {CoverageState.COMPLETE, CoverageState.CONFIRMED_EMPTY} for dimension in ("clause_structure", "phrase_constituency", "syntactic_function"))
+            analysis_covered = analysis_covered or _record_complete(record, ("construction_relations", "dependencies"))
+            allow_prose = _record_complete_all(record, ("clause_structure", "phrase_constituency", "syntactic_function"))
             analysis = _project_analysis(record, field, record[field], rendering_mode, analysis_covered, allow_prose)
             if analysis is not None:
                 projection[field] = analysis
