@@ -12,9 +12,9 @@ except ImportError:
     from scripts.dimension_registry import dimension_spec
 
 try:
-    from collection_contract import collection_target_ids
+    from collection_contract import collection_target_ids, validate_coverage_target
 except ImportError:
-    from scripts.collection_contract import collection_target_ids
+    from scripts.collection_contract import collection_target_ids, validate_coverage_target
 
 try:
     from authoritative_payload import AuthoritativePayload, AuthoritativePayloadState, authoritative_payload, authoritative_payload_state
@@ -276,6 +276,9 @@ def _dimension_entry_issue(
         if not isinstance(node_kind, str) or not spec.allows_node(node_kind):
             expected = ", ".join(sorted(spec.allowed_node_kinds))
             return f"dimension {dimension!r} node scope must reference {expected} node(s)"
+        target_validation = validate_coverage_target(record, dimension, scope["node"])
+        if not target_validation.valid:
+            return target_validation.reason
     completeness = entry.get("completeness")
     omission = entry.get("omission")
     evidence = entry.get("evidence")
@@ -387,11 +390,17 @@ def _collapse_states(
 def declared_coverage_state(
     record: dict[str, Any],
     dimension: str,
-    target: str | None = None,
+    target: str | dict[str, Any] | None = None,
 ) -> CoverageState:
     """Resolve declaration precedence without validating payload content."""
     if dimension_spec(dimension) is None:
         raise CoverageResolutionError(f"unknown coverage dimension {dimension!r}")
+    target_validation = validate_coverage_target(record, dimension, target)
+    if not target_validation.valid:
+        raise CoverageResolutionError(target_validation.reason)
+    if target_validation.target_kind == "region_target":
+        raise CoverageResolutionError("coverage resolution targets must be node IDs or the record target")
+    target = target_validation.normalized_target
     annotation_scope = record.get("annotation_scope")
     dimensions = annotation_scope.get("dimensions", []) if isinstance(annotation_scope, dict) else []
     if not isinstance(dimensions, list):
@@ -403,8 +412,8 @@ def declared_coverage_state(
         and isinstance(entry.get("scope"), dict)
     ]
     if target is not None:
-        if not _target_exists(record, target):
-            raise CoverageResolutionError("coverage target must reference a known word, constituent, or clause")
+        if not isinstance(target, str):
+            raise CoverageResolutionError("coverage target must be a node ID or record target")
         target_span = _target_span(record, target)
         if target_span is None:
             raise CoverageResolutionError("coverage target span cannot be resolved")
@@ -445,7 +454,7 @@ def declared_coverage_state(
 def resolve_coverage(
     record: dict[str, Any],
     dimension: str,
-    target: str | None = None,
+    target: str | dict[str, Any] | None = None,
 ) -> CoverageState:
     """Resolve by exact node, containment-minimal region, then record scope."""
     if not isinstance(record, dict):

@@ -12,9 +12,9 @@ from enum import Enum
 from typing import Any
 
 try:
-    from collection_contract import normalize_predicate_reference
+    from collection_contract import normalize_predicate_reference, validate_coverage_target
 except ImportError:
-    from scripts.collection_contract import normalize_predicate_reference
+    from scripts.collection_contract import normalize_predicate_reference, validate_coverage_target
 
 try:
     from data_common import LEXICAL_CATEGORIES, PHRASE_CATEGORIES, SEMANTIC_ROLES
@@ -710,7 +710,10 @@ def authoritative_payload(
     spec = dimension_spec(dimension)
     if spec is None:
         return AuthoritativePayload(dimension, target, AuthoritativePayloadState.ABSENT)
-    effective_target = None if spec.allowed_scope_kinds == frozenset({"record"}) else target
+    target_validation = validate_coverage_target(record, dimension, target)
+    if not target_validation.valid:
+        return AuthoritativePayload(dimension, target, AuthoritativePayloadState.ABSENT)
+    effective_target = None if target_validation.is_record_target else target_validation.normalized_target
     accumulator = _PayloadAccumulator()
     _collect_payload(record, spec, _scope(effective_target), accumulator)
     if not accumulator.resolved_count and not accumulator.unresolved_count and _declared_confirmed_empty(record, dimension, effective_target if isinstance(effective_target, str) else None):

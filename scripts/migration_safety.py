@@ -6,10 +6,10 @@ import copy
 from typing import Any
 
 try:
-    from collection_contract import collection_item_in_scope, normalize_collection_item
+    from collection_contract import collection_item_in_scope, normalize_collection_item, validate_coverage_target
     from dimension_registry import DIMENSION_REGISTRY, dimension_spec
 except ImportError:
-    from scripts.collection_contract import collection_item_in_scope, normalize_collection_item
+    from scripts.collection_contract import collection_item_in_scope, normalize_collection_item, validate_coverage_target
     from scripts.dimension_registry import DIMENSION_REGISTRY, dimension_spec
 
 
@@ -86,6 +86,7 @@ def _scope_is_supported(record: dict[str, Any], dimension: str, scope: Any) -> b
             and node in objects
             and isinstance(objects[node].get("node_kind"), str)
             and spec.allows_node(objects[node]["node_kind"])
+            and validate_coverage_target(record, dimension, node).valid
         )
     words = record.get("words", [])
     start, end = scope.get("start"), scope.get("end")

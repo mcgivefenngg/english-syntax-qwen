@@ -596,7 +596,17 @@ def _typed_property_is_covered(
     dimensions = _typed_property_dimensions(context, property_name, target)
     if target is None:
         return any(_covered(record, dimension) for dimension in dimensions)
-    return any(_covered(record, dimension, target[1]) for dimension in dimensions)
+    record_target_dimensions: set[str] = set()
+    for dimension in dimensions:
+        spec = dimension_spec(dimension)
+        if spec is not None and spec.allowed_scope_kinds == frozenset({"record"}):
+            record_target_dimensions.add(dimension)
+    return any(
+        _covered(record, dimension)
+        if dimension in record_target_dimensions
+        else _covered(record, dimension, target[1])
+        for dimension in dimensions
+    )
 
 
 def _filter_typed_properties(

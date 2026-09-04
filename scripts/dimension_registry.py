@@ -39,6 +39,7 @@ class DimensionSpec:
     content_field: str | None = None
     target_fields: tuple[str, ...] = ()
     target_lemma_field: str | None = None
+    target_owner: str | None = None
 
     @property
     def fields(self) -> frozenset[str]:
@@ -89,6 +90,7 @@ def _spec(
     content_field: str | None = None,
     target_fields: tuple[str, ...] = (),
     target_lemma_field: str | None = None,
+    target_owner: str | None = None,
 ) -> DimensionSpec:
     return DimensionSpec(
         name=name,
@@ -105,6 +107,7 @@ def _spec(
         content_field=content_field,
         target_fields=target_fields,
         target_lemma_field=target_lemma_field,
+        target_owner=target_owner,
     )
 
 
@@ -122,7 +125,7 @@ _DIMENSIONS = {
             _payload("words", "lexical_category", "external_pos_tags"),
             _payload("typed_arguments", "category"),
             _payload("typed_relation", "category"),
-        ), target_fields=("id",),
+        ), target_fields=("id",), target_owner="canonical_word",
     ),
     "phrase_constituency": _spec(
         "phrase_constituency", scopes={"record", "node", "region"}, nodes={"phrase", "clause"},
@@ -152,19 +155,19 @@ _DIMENSIONS = {
             _payload("constituents", "id", "node_kind", "span", "phrase_category", "head", "parent", "relation_label", "span_relation"),
             _payload("typed_arguments", "category"),
             _payload("typed_relation", "category"),
-        ), target_fields=("id",),
+        ), target_fields=("id",), target_owner="np_phrase",
     ),
     "clause_ontology": _spec(
         "clause_ontology", scopes={"record", "node"}, nodes={"clause"},
         evidence={"present", "empty", "unannotated"}, empty_scopes={"record"},
         partial_present_target_source="item_ids", payload_family="clause_collection", collection_like=True,
-        payloads=(_payload("clauses", "id", "node_kind", "span", "finiteness", "clause_form", "clause_construction", "integration", "subject", "predicand", "head", "marker_ids", "integration_parent"),), content_field="clauses", target_fields=("id",),
+        payloads=(_payload("clauses", "id", "node_kind", "span", "finiteness", "clause_form", "clause_construction", "integration", "subject", "predicand", "head", "marker_ids", "integration_parent"),), content_field="clauses", target_fields=("id",), target_owner="canonical_clause",
     ),
     "clause_structure": _spec(
         "clause_structure", scopes={"record", "node"}, nodes={"clause"},
         evidence={"present", "empty", "unannotated"}, empty_scopes={"record"},
         partial_present_target_source="item_ids", payload_family="clause_collection", collection_like=True,
-        payloads=(_payload("clauses", "id", "node_kind", "span", "finiteness", "clause_form", "clause_construction", "integration", "subject", "predicand", "head", "marker_ids", "integration_parent"),), content_field="clauses", target_fields=("id",),
+        payloads=(_payload("clauses", "id", "node_kind", "span", "finiteness", "clause_form", "clause_construction", "integration", "subject", "predicand", "head", "marker_ids", "integration_parent"),), content_field="clauses", target_fields=("id",), target_owner="canonical_clause",
     ),
     "syntactic_function": _spec(
         "syntactic_function", scopes={"record", "node", "region"}, nodes=set(NODE_KINDS),
@@ -194,7 +197,7 @@ _DIMENSIONS = {
     ),
     "dependencies": _spec(
         "dependencies", scopes={"record"}, evidence={"present", "empty", "unannotated"}, empty_scopes={"record"},
-        partial_present_target_source="relation_targets", payload_family="dependency_collection", collection_like=True,
+        partial_present_target_source="record", payload_family="dependency_collection", collection_like=True,
         payloads=(
             _payload("dependencies", "relation", "head", "dependent"),
             _payload("typed_analysis", "kind", "framework", "arguments", "entities", "relations"),
@@ -205,7 +208,7 @@ _DIMENSIONS = {
     ),
     "semantic_roles": _spec(
         "semantic_roles", scopes={"record"}, evidence={"present", "empty", "unannotated"}, empty_scopes={"record"},
-        partial_present_target_source="relation_targets", payload_family="semantic_role_collection", collection_like=True,
+        partial_present_target_source="record", payload_family="semantic_role_collection", collection_like=True,
         payloads=(
             _payload("semantic_roles", "constituent", "role", "predicate"),
             _payload("typed_arguments", "role"),
@@ -216,7 +219,7 @@ _DIMENSIONS = {
         "lexical_valency", scopes={"record", "node"}, nodes={"word"},
         evidence={"present", "empty", "unannotated"}, empty_scopes={"record"},
         partial_present_target_source="predicate_ids", payload_family="valency_collection", collection_like=True,
-        payloads=(_payload("lexical_valency", "predicate", "frame", "selected_complements"),), content_field="lexical_valency", target_fields=("predicate",), target_lemma_field="predicate",
+        payloads=(_payload("lexical_valency", "predicate", "frame", "selected_complements"),), content_field="lexical_valency", target_fields=("predicate",), target_lemma_field="predicate", target_owner="lexical_head_word",
     ),
     "framework_mapping": _spec(
         "framework_mapping", scopes={"record"}, evidence={"present", "unannotated"}, empty_scopes=set(),

@@ -160,11 +160,12 @@ class EvidenceContentConsistencyTests(unittest.TestCase):
         with self.assertRaises(CoverageResolutionError):
             resolve_coverage(record, "dependencies", "subj")
 
-    def test_omitted_scope_is_not_confirmed_empty(self) -> None:
+    def test_omitted_record_scope_rejects_nonrecord_target(self) -> None:
         entry = declaration("dependencies", {"kind": "record"}, "omitted", "intentional", "unannotated")
         record = record_with("dependencies", entry, [])
         self.assertEqual(validate_record(record, "omitted-scope"), [])
-        self.assertIs(resolve_coverage(record, "dependencies", "obj"), CoverageState.OMITTED)
+        with self.assertRaises(CoverageResolutionError):
+            resolve_coverage(record, "dependencies", "obj")
 
     def test_omitted_scope_content_is_rejected(self) -> None:
         entry = declaration("dependencies", {"kind": "record"}, "omitted", "intentional", "unannotated")

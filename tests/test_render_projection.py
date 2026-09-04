@@ -57,14 +57,12 @@ class CoverageAwareProjectionTests(unittest.TestCase):
     def test_subject_internal_structure_is_kept_object_internal_is_omitted(self) -> None:
         record = record_with(
             declaration("np_internal_constituency", {"kind": "node", "node": "subj"}),
-            declaration("np_internal_constituency", {"kind": "node", "node": "obj"}, "omitted", "intentional", "unannotated"),
             declaration("syntactic_function", {"kind": "node", "node": "obj"}),
         )
         record["constituents"].extend([
             {"id": "subj-det", "node_kind": "phrase", "phrase_category": "DetP", "span": {"start": 0, "end": 1}, "parent": "subj", "function": "determiner"},
             {"id": "obj-det", "node_kind": "phrase", "phrase_category": "DetP", "span": {"start": 3, "end": 4}, "parent": "obj", "function": "determiner"},
         ])
-        record["constituents"][1].pop("phrase_category", None)
         record["constituents"][-1].pop("function", None)
         by_id = {item["id"]: item for item in linguistic_projection(record)["constituents"]}
         self.assertIn("subj-det", by_id)
@@ -308,13 +306,11 @@ class CoverageAwareProjectionTests(unittest.TestCase):
             declaration("clause_structure", {"kind": "record"}),
             declaration("vp_complementation", {"kind": "record"}),
             declaration("np_internal_constituency", {"kind": "node", "node": "subj"}),
-            declaration("np_internal_constituency", {"kind": "node", "node": "obj"}, "omitted", "intentional", "unannotated"),
             declaration("syntactic_function", {"kind": "node", "node": "obj"}),
             declaration("semantic_roles", {"kind": "record"}, "unannotated", "intentional", "unannotated"),
             declaration("dependencies", {"kind": "record"}, evidence="empty"),
         )
         record["dependencies"] = []
-        record["constituents"][1].pop("phrase_category", None)
         payload = linguistic_projection(record)
         self.assertIn("clauses", payload)
         self.assertIn("constituents", payload)

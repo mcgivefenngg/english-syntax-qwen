@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 try:
@@ -36,22 +37,208 @@ def _word_ids_by_field(record: dict[str, Any], field: str) -> dict[str, tuple[st
     return {value: tuple(identifiers) for value, identifiers in matches.items()}
 
 
-def normalize_predicate_reference(record: dict[str, Any], reference: Any) -> str | None:
-    """Return an explicit word ID for an ID or uniquely matching legacy lemma."""
+def predicate_reference_candidates(record: dict[str, Any], reference: Any) -> tuple[str, ...]:
+    """Return every deterministic candidate for a predicate reference."""
     if not isinstance(reference, str) or not reference:
-        return None
+        return ()
     word_ids = set(_word_ids(record))
     if reference in word_ids:
-        return reference
+        return (reference,)
     lemma_matches = _word_ids_by_field(record, "lemma").get(reference, ())
     if lemma_matches:
-        if len(lemma_matches) == 1:
-            return lemma_matches[0]
-        return None
-    form_matches = _word_ids_by_field(record, "form").get(reference, ())
-    if len(form_matches) == 1:
-        return form_matches[0]
-    return None
+        return lemma_matches
+    return _word_ids_by_field(record, "form").get(reference, ())
+
+
+def normalize_predicate_reference(record: dict[str, Any], reference: Any) -> str | None:
+    """Return an explicit word ID for an ID or uniquely matching legacy lemma."""
+    candidates = predicate_reference_candidates(record, reference)
+    return candidates[0] if len(candidates) == 1 else None
+
+
+@dataclass(frozen=True)
+class CoverageTargetValidation:
+    """Classify one coverage target against a dimension's owner contract."""
+
+    valid: bool
+    target_kind: str
+    reason: str
+    normalized_target: str | dict[str, Any] | None = None
+    node_kind: str | None = None
+
+    @property
+    def kind(self) -> str:
+        return self.target_kind
+
+    @property
+    def is_record_target(self) -> bool:
+        return self.target_kind == "record_target"
+
+    @property
+    def is_dimension_target(self) -> bool:
+        return self.target_kind in {"dimension_node", "region_target"}
+
+
+def _coverage_target_result(
+    valid: bool,
+    target_kind: str,
+    reason: str,
+    *,
+    normalized_target: str | dict[str, Any] | None = None,
+    node_kind: str | None = None,
+) -> CoverageTargetValidation:
+    return CoverageTargetValidation(
+        valid=valid,
+        target_kind=target_kind,
+        reason=reason,
+        normalized_target=normalized_target,
+        node_kind=node_kind,
+    )
+
+
+def _coverage_target_objects(record: dict[str, Any], target: str) -> tuple[tuple[str, dict[str, Any]], ...]:
+    matches: list[tuple[str, dict[str, Any]]] = []
+    for collection in ("words", "constituents", "clauses"):
+        values = record.get(collection, [])
+        if not isinstance(values, list):
+            continue
+        matches.extend(
+            (collection, item)
+            for item in values
+            if isinstance(item, dict) and item.get("id") == target
+        )
+    return tuple(matches)
+
+
+def _lexical_valency_owner_ids(record: dict[str, Any]) -> tuple[set[str], set[str]]:
+    values = record.get("lexical_valency", [])
+    if not isinstance(values, list):
+        return set(), set()
+    owners: set[str] = set()
+    ambiguous: set[str] = set()
+    for item in values:
+        if not isinstance(item, dict):
+            continue
+        candidates = predicate_reference_candidates(record, item.get("predicate"))
+        if len(candidates) == 1:
+            owners.add(candidates[0])
+        elif len(candidates) > 1:
+            ambiguous.update(candidates)
+    return owners, ambiguous
+
+
+def validate_coverage_target(
+    record: dict[str, Any],
+    dimension: str,
+    target: str | dict[str, Any] | None = None,
+) -> CoverageTargetValidation:
+    """Validate record, node, and region target applicability for a dimension."""
+    spec = dimension_spec(dimension)
+    if spec is None:
+        return _coverage_target_result(False, "invalid_dimension", f"unknown coverage dimension {dimension!r}")
+    if target is None or target == {"kind": "record"}:
+        if spec.allows_scope("record"):
+            return _coverage_target_result(True, "record_target", "record target is applicable")
+        return _coverage_target_result(
+            False,
+            "unsupported_record_target",
+            f"dimension {dimension!r} does not support record target semantics",
+        )
+    if isinstance(target, dict):
+        target_kind = target.get("kind")
+        if target_kind == "region":
+            if not spec.allows_scope("region"):
+                return _coverage_target_result(
+                    False,
+                    "unsupported_non_record_target",
+                    f"dimension {dimension!r} does not support region targets",
+                )
+            if set(target) != {"kind", "start", "end"}:
+                return _coverage_target_result(False, "invalid_target", "coverage region target has invalid fields")
+            start, end = target.get("start"), target.get("end")
+            token_count = record.get("words", [])
+            token_count = len(token_count) if isinstance(token_count, list) else 0
+            if type(start) is not int or type(end) is not int or start < 0 or end <= start or end > token_count:
+                return _coverage_target_result(False, "invalid_target", "coverage region target must be a valid token span")
+            return _coverage_target_result(True, "region_target", "region target is applicable", normalized_target=target)
+        if target_kind == "node" and set(target) == {"kind", "node"}:
+            target = target.get("node")
+        else:
+            return _coverage_target_result(False, "invalid_target", "coverage target must be a node ID or record target")
+    if not isinstance(target, str) or not target:
+        return _coverage_target_result(False, "invalid_target", "coverage target must be a non-empty node ID or record target")
+    if not spec.allows_scope("node"):
+        return _coverage_target_result(
+            False,
+            "unsupported_non_record_target",
+            f"dimension {dimension!r} has no supported non-record target semantics",
+        )
+    matches = _coverage_target_objects(record, target)
+    if not matches:
+        return _coverage_target_result(False, "unknown_target", "coverage target must reference a known word, constituent, or clause")
+    if len(matches) != 1:
+        return _coverage_target_result(False, "ambiguous_target", f"coverage target {target!r} has ambiguous canonical identity")
+    collection, item = matches[0]
+    node_kind = item.get("node_kind")
+    if not isinstance(node_kind, str) or not spec.allows_node(node_kind):
+        expected = ", ".join(sorted(spec.allowed_node_kinds))
+        return _coverage_target_result(
+            False,
+            "invalid_node_kind",
+            f"dimension {dimension!r} target {target!r} must reference {expected} node(s)",
+            node_kind=node_kind if isinstance(node_kind, str) else None,
+        )
+    if spec.target_owner == "canonical_word" and (collection != "words" or node_kind != "word"):
+        return _coverage_target_result(
+            False,
+            "invalid_node_kind",
+            f"dimension {dimension!r} target {target!r} must reference a canonical word node",
+            node_kind=node_kind,
+        )
+    if spec.target_owner == "canonical_clause" and (collection != "clauses" or node_kind != "clause"):
+        return _coverage_target_result(
+            False,
+            "invalid_node_kind",
+            f"dimension {dimension!r} target {target!r} must reference a canonical clause node",
+            node_kind=node_kind,
+        )
+    if spec.target_owner == "np_phrase" and (collection != "constituents" or node_kind != "phrase" or item.get("phrase_category") != "NP"):
+        return _coverage_target_result(
+            False,
+            "wrong_owner",
+            f"dimension {dimension!r} target {target!r} must reference an applicable NP phrase owner",
+            node_kind=node_kind,
+        )
+    if spec.target_owner == "lexical_head_word":
+        if collection != "words" or node_kind != "word":
+            return _coverage_target_result(
+                False,
+                "invalid_node_kind",
+                f"dimension {dimension!r} target {target!r} must reference a lexical-head word node",
+                node_kind=node_kind,
+            )
+        owners, ambiguous = _lexical_valency_owner_ids(record)
+        if target in ambiguous:
+            return _coverage_target_result(
+                False,
+                "ambiguous_owner",
+                f"dimension {dimension!r} target {target!r} has ambiguous lexical-head owner identity",
+                node_kind=node_kind,
+            )
+        if target not in owners:
+            return _coverage_target_result(
+                False,
+                "wrong_owner",
+                f"dimension {dimension!r} target {target!r} does not own an applicable lexical-valency item",
+                node_kind=node_kind,
+            )
+    return _coverage_target_result(
+        True,
+        "dimension_node",
+        f"dimension {dimension!r} target {target!r} is applicable",
+        normalized_target=target,
+        node_kind=node_kind,
+    )
 
 
 def predicate_reference_issue(record: dict[str, Any], reference: Any, label: str) -> str | None:

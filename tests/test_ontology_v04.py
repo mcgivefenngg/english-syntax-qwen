@@ -182,10 +182,10 @@ class OntologyV04Tests(unittest.TestCase):
             {"dimension": "ambiguity", "scope": {"kind": "record"}, "completeness": "complete", "omission": "none", "evidence": "present"}
         )
         default = linguistic_projection(record)
-        self.assertNotIn("lexical_analysis", default["words"][0])
+        self.assertNotIn("words", default)
         self.assertNotIn("ambiguity", default)
         candidate_mode = linguistic_projection(record, rendering_mode="learner_facing")
-        self.assertNotIn("lexical_analysis", candidate_mode["words"][0])
+        self.assertNotIn("words", candidate_mode)
         self.assertNotIn("ambiguity", candidate_mode)
         with self.assertRaises(ValueError):
             linguistic_projection(record, rendering_mode="governance")

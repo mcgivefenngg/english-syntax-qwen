@@ -107,6 +107,15 @@ class DimensionRegistryTests(unittest.TestCase):
                 with self.assertRaises(CoverageResolutionError):
                     resolve_coverage(record, "dependencies")
 
+    def test_registry_declares_target_ownership_contracts(self) -> None:
+        self.assertEqual(DIMENSION_REGISTRY["lexical_category"].target_owner, "canonical_word")
+        self.assertEqual(DIMENSION_REGISTRY["clause_ontology"].target_owner, "canonical_clause")
+        self.assertEqual(DIMENSION_REGISTRY["clause_structure"].target_owner, "canonical_clause")
+        self.assertEqual(DIMENSION_REGISTRY["np_internal_constituency"].target_owner, "np_phrase")
+        self.assertEqual(DIMENSION_REGISTRY["lexical_valency"].target_owner, "lexical_head_word")
+        self.assertEqual(DIMENSION_REGISTRY["dependencies"].partial_present_target_source, "record")
+        self.assertEqual(DIMENSION_REGISTRY["semantic_roles"].partial_present_target_source, "record")
+
     def test_semantic_roles_node_and_region_scopes_are_rejected(self) -> None:
         for scope in ({"kind": "node", "node": "obj"}, {"kind": "region", "start": 0, "end": 2}):
             with self.subTest(scope=scope):

@@ -134,10 +134,15 @@ mixed record payload without such a target representation must use
 limited to the record-level collection payloads shown above; scoped empty
 assertions are not inferred from missing items.
 
-In V0.4, `dependencies` and `semantic_roles` are record-scoped collections:
-their relation endpoints are referential content, not coverage owners.
-`lexical_valency` is owned by its lexical-head word; selected complements are
-content references inside the valency item and do not grant valency coverage.
+Target existence is not dimension applicability. The record-only dimensions
+(`dependencies`, `semantic_roles`, `construction_relations`, and
+`framework_mapping`) accept only record-target semantics; relation endpoints
+are referential content, not coverage owners. `lexical_category` is
+word-targeted, while clause dimensions require canonical clause nodes and
+NP-internal constituency requires an applicable NP phrase owner.
+`lexical_valency` is owned by its lexical-head word; selected complements and
+other relation endpoints are content references inside an item and do not
+grant coverage ownership.
 Legacy predicate lemma or surface-form references are normalized to a word ID
 only when the match is unique. Ambiguous predicate ownership fails closed.
 Unknown or uncovered content remains unknown or omitted; it is never rewritten

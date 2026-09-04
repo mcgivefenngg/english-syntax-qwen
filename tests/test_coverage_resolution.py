@@ -89,15 +89,14 @@ class CoverageResolutionTests(unittest.TestCase):
         record = with_dimensions(
             declaration({"kind": "region", "start": 0, "end": 2}, "complete", dimension="phrase_constituency")
         )
-        self.assertIs(resolve_coverage(record, "phrase_constituency", "w0"), CoverageState.COMPLETE)
-        self.assertIs(resolve_coverage(record, "phrase_constituency", "w2"), CoverageState.UNANNOTATED)
+        self.assertIs(resolve_coverage(record, "phrase_constituency", "subj"), CoverageState.COMPLETE)
+        self.assertIs(resolve_coverage(record, "phrase_constituency", "obj"), CoverageState.UNANNOTATED)
 
-    def test_word_target_uses_canonical_token_index_for_region_membership(self) -> None:
+    def test_phrase_target_uses_canonical_span_for_region_membership(self) -> None:
         record = with_dimensions(
             declaration({"kind": "region", "start": 0, "end": 2}, "complete", dimension="phrase_constituency"),
         )
-        record["words"][0]["span"] = {"start": 4, "end": 6}
-        self.assertIs(resolve_coverage(record, "phrase_constituency", "w0"), CoverageState.COMPLETE)
+        self.assertIs(resolve_coverage(record, "phrase_constituency", "subj"), CoverageState.COMPLETE)
 
     def test_conflicting_extra_word_span_cannot_change_region_membership(self) -> None:
         record = with_dimensions(
@@ -105,7 +104,7 @@ class CoverageResolutionTests(unittest.TestCase):
             declaration({"kind": "region", "start": 3, "end": 5}, "complete", dimension="phrase_constituency"),
         )
         record["words"][0]["span"] = {"start": 3, "end": 5}
-        self.assertIs(resolve_coverage(record, "phrase_constituency", "w0"), CoverageState.COMPLETE)
+        self.assertIs(resolve_coverage(record, "phrase_constituency", "subj"), CoverageState.COMPLETE)
 
     def test_unknown_node_target_does_not_inherit_record_complete(self) -> None:
         record = with_dimensions(declaration({"kind": "record"}, "complete"))
