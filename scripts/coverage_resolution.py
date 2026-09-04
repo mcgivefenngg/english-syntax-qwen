@@ -6,6 +6,11 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+try:
+    from dimension_registry import DIMENSION_REGISTRY, dimension_spec
+except ImportError:
+    from scripts.dimension_registry import DIMENSION_REGISTRY, dimension_spec
+
 
 class CoverageState(str, Enum):
     COMPLETE = "complete"
@@ -161,35 +166,24 @@ def _regions_overlap(left: dict[str, Any], right: dict[str, Any]) -> bool:
 
 
 _COLLECTION_DIMENSIONS: dict[str, str] = {
-    "dependencies": "dependencies",
-    "semantic_roles": "semantic_roles",
-    "lexical_valency": "lexical_valency",
+    name: spec.content_field
+    for name, spec in DIMENSION_REGISTRY.items()
+    if spec.content_field is not None
 }
 
 
 def _collection_targets(record: dict[str, Any], dimension: str, item: Any) -> list[str]:
     if not isinstance(item, dict):
         return []
-    if dimension == "dependencies":
-        values = [item.get("head"), item.get("dependent"), item.get("source"), item.get("target")]
-        return [value for value in values if isinstance(value, str)]
-    if dimension == "semantic_roles":
-        values = [item.get("constituent"), item.get("predicate")]
-        targets = [value for value in values if isinstance(value, str)]
-        objects = _record_objects(record)
-        words = record.get("words", [])
-        predicate = item.get("predicate")
-        if isinstance(predicate, str) and predicate not in objects and isinstance(words, list):
-            targets.extend(
-                word["id"] for word in words
-                if isinstance(word, dict) and word.get("lemma") == predicate and isinstance(word.get("id"), str)
-            )
-        return targets
-    values = item.get("selected_complements", [])
-    targets = [value for value in values if isinstance(value, str)] if isinstance(values, list) else []
-    predicate = item.get("predicate")
+    spec = dimension_spec(dimension)
+    if spec is None:
+        return []
+    targets = [item[field] for field in spec.target_fields if isinstance(item.get(field), str)]
+    if not targets and spec.target_fields == ("id",) and isinstance(item.get("id"), str):
+        targets.append(item["id"])
+    predicate = item.get(spec.target_lemma_field) if spec.target_lemma_field else None
     objects = _record_objects(record)
-    if isinstance(predicate, str):
+    if isinstance(predicate, str) and spec.target_lemma_field:
         if predicate in objects:
             targets.append(predicate)
         else:
@@ -315,6 +309,44 @@ def _collection_content_issues(
     return issues
 
 
+def _dimension_entry_issue(
+    record: dict[str, Any],
+    entry: dict[str, Any],
+    objects: dict[str, dict[str, Any]],
+    token_count: int,
+) -> str | None:
+    dimension = entry.get("dimension")
+    spec = dimension_spec(dimension)
+    if spec is None:
+        return f"unknown coverage dimension {dimension!r}"
+    scope = entry.get("scope")
+    issue = _scope_issue(scope, set(objects), token_count)
+    if issue is not None:
+        return issue
+    scope_kind = scope["kind"]
+    if not spec.allows_scope(scope_kind):
+        return f"dimension {dimension!r} does not support {scope_kind} scope"
+    if scope_kind == "node":
+        node_kind = objects[scope["node"]].get("node_kind")
+        if not isinstance(node_kind, str) or not spec.allows_node(node_kind):
+            expected = ", ".join(sorted(spec.allowed_node_kinds))
+            return f"dimension {dimension!r} node scope must reference {expected} node(s)"
+    evidence = entry.get("evidence")
+    if evidence is not None and evidence not in spec.allowed_evidence_modes:
+        return f"dimension {dimension!r} does not support evidence={evidence!r}"
+    if evidence == "empty":
+        if not spec.allows_confirmed_empty(scope_kind):
+            return f"dimension {dimension!r} cannot represent confirmed-empty at {scope_kind} scope"
+        if entry.get("completeness") != "complete":
+            return "confirmed-empty evidence requires completeness='complete'"
+    if entry.get("completeness") == "partial":
+        if not spec.allows_partial(scope_kind):
+            return f"dimension {dimension!r} does not support partial coverage at {scope_kind} scope"
+        if scope_kind == "record" and evidence == "present" and spec.partial_present_target_source is None:
+            return f"dimension {dimension!r} record-level partial present coverage has no identifiable target representation"
+    return None
+
+
 def coverage_declaration_issues(record: dict[str, Any]) -> list[CoverageIssue]:
     """Return structural declaration issues used by dataset validation."""
     annotation_scope = record.get("annotation_scope")
@@ -330,13 +362,14 @@ def coverage_declaration_issues(record: dict[str, Any]) -> list[CoverageIssue]:
     for index, entry in enumerate(dimensions):
         if not isinstance(entry, dict) or not isinstance(entry.get("dimension"), str):
             continue
+        dimension = entry["dimension"]
         scope = entry.get("scope")
-        issue = _scope_issue(scope, set(objects), token_count)
+        issue = _dimension_entry_issue(record, entry, objects, token_count)
         if issue is not None:
             issues.append(CoverageIssue(index, issue))
             continue
         valid_entries.append((index, entry))
-        identity = (entry["dimension"], coverage_scope_key(scope))
+        identity = (dimension, coverage_scope_key(scope))
         previous = exact_scopes.get(identity)
         if previous is not None:
             if _semantic_key(previous[1]) == _semantic_key(entry):
@@ -393,6 +426,8 @@ def resolve_coverage(
     target: str | None = None,
 ) -> CoverageState:
     """Resolve by exact node, containment-minimal region, then record scope."""
+    if dimension_spec(dimension) is None:
+        raise CoverageResolutionError(f"unknown coverage dimension {dimension!r}")
     annotation_scope = record.get("annotation_scope")
     dimensions = annotation_scope.get("dimensions", []) if isinstance(annotation_scope, dict) else []
     if not isinstance(dimensions, list):
@@ -403,6 +438,12 @@ def resolve_coverage(
         and entry.get("dimension") == dimension
         and isinstance(entry.get("scope"), dict)
     ]
+    objects = _record_objects(record)
+    token_count = len(record.get("words", [])) if isinstance(record.get("words"), list) else 0
+    for entry in entries:
+        issue = _dimension_entry_issue(record, entry, objects, token_count)
+        if issue is not None:
+            raise CoverageResolutionError(issue)
     if target is not None:
         if not _target_exists(record, target):
             raise CoverageResolutionError("coverage target must reference a known word, constituent, or clause")

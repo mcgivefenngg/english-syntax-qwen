@@ -92,6 +92,34 @@ confirmed empty set. These evidence states must agree with the canonical
 collection content at their declared scope: absence of annotation is not
 negative gold.
 
+The executable dimension registry is the V0.4 scope/evidence contract. The
+table below summarizes its stable capabilities; it does not replace the typed
+payload definitions.
+
+| Dimension | Allowed scope | Partial scope | Confirmed-empty scope |
+| --- | --- | --- | --- |
+| `tokens` | record | record | — |
+| `lexical_category` | record, word node | record, word node | — |
+| `phrase_constituency` | record, node, region | record, node, region | record |
+| `constituency` | record, node, region | record, node, region | record |
+| `np_internal_constituency` | record, phrase node, region | record, phrase node, region | — |
+| `clause_ontology` | record, clause node | record, clause node | record |
+| `clause_structure` | record, clause node | record, clause node | record |
+| `syntactic_function` | record, node, region | record, node, region | — |
+| `vp_complementation` | record, node, region | record, node, region | — |
+| `dependencies` | record | record | record |
+| `semantic_roles` | record | record | record |
+| `lexical_valency` | record, lexical-head word node | record, lexical-head word node | record |
+| `framework_mapping` | record | record | — |
+| `construction_relations` | record | record | — |
+
+Record-level `partial` with `evidence: "present"` is valid only when the
+registry names an item or relation target source for the payload. A scalar or
+mixed record payload without such a target representation must use
+`complete`, `unannotated`, or an explicit omission state. Confirmed-empty is
+limited to the record-level collection payloads shown above; scoped empty
+assertions are not inferred from missing items.
+
 ## Rendering and governance
 
 The default renderer projects an explicit linguistic-field allowlist at field

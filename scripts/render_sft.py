@@ -19,6 +19,11 @@ try:
 except ImportError:
     from scripts.data_common import read_jsonl
 
+try:
+    from dimension_registry import DIMENSION_REGISTRY, PROJECTION_FIELD_DIMENSIONS
+except ImportError:
+    from scripts.dimension_registry import DIMENSION_REGISTRY, PROJECTION_FIELD_DIMENSIONS
+
 
 DEFAULT_SYSTEM = "You are English Syntax Tutor. Distinguish lexical category, phrase category, syntactic function, semantic role, and framework-specific terminology."
 
@@ -72,31 +77,13 @@ LINGUISTIC_NESTED_FIELDS = {
     "rejected": {"analysis", "reason"},
 }
 DIMENSION_FIELDS = {
-    "dependencies": "dependencies", "semantic_roles": "semantic_roles", "lexical_valency": "lexical_valency",
-    "clause_ontology": "clauses", "clause_structure": "clauses", "phrase_constituency": "constituents",
-    "constituency": "constituents", "np_internal_constituency": "constituents", "syntactic_function": "constituents",
-    "vp_complementation": "constituents", "construction_relations": "construction_signature", "framework_mapping": "framework",
-    "tokens": "words", "lexical_category": "words", "ambiguity": "ambiguity",
-    "alternative_analyses": "alternative_analyses", "error_diagnosis": "error_diagnosis",
+    name: spec.primary_field
+    for name, spec in DIMENSION_REGISTRY.items()
+    if spec.primary_field is not None
 }
 DIMENSION_PROPERTY_MAP = {
-    "tokens": {"words": frozenset({"id", "node_kind", "form", "lemma"})},
-    "lexical_category": {"words": frozenset({"lexical_category", "external_pos_tags"})},
-    "phrase_constituency": {"constituents": frozenset({"id", "node_kind", "span", "phrase_category", "head", "parent", "relation_label", "span_relation"})},
-    "constituency": {"constituents": frozenset({"id", "node_kind", "span", "phrase_category", "head", "parent", "relation_label", "span_relation"})},
-    "np_internal_constituency": {"constituents": frozenset({"id", "node_kind", "span", "phrase_category", "head", "parent", "relation_label", "span_relation"})},
-    "syntactic_function": {"constituents": frozenset({"id", "node_kind", "span", "function", "clause_ref", "realization"}), "words": frozenset({"id", "node_kind", "syntactic_function"})},
-    "clause_ontology": {"clauses": frozenset({"id", "node_kind", "span", "finiteness", "clause_form", "clause_construction", "integration", "subject", "predicand", "head", "marker_ids", "integration_parent"})},
-    "clause_structure": {"clauses": frozenset({"id", "node_kind", "span", "finiteness", "clause_form", "clause_construction", "integration", "subject", "predicand", "head", "marker_ids", "integration_parent"})},
-    "vp_complementation": {"constituents": frozenset({"id", "node_kind", "span", "function", "clause_ref", "realization", "head", "parent"}), "lexical_valency": frozenset({"predicate", "frame", "selected_complements"})},
-    "lexical_valency": {"lexical_valency": frozenset({"predicate", "frame", "selected_complements"})},
-    "dependencies": {"dependencies": frozenset({"relation", "head", "dependent"})},
-    "semantic_roles": {"semantic_roles": frozenset({"constituent", "role", "predicate"})},
-    "construction_relations": {"construction_signature": frozenset({"predicate_lemma", "construction_type", "argument_pattern", "function_pattern"}), "heads": frozenset({"head", "dependent", "relation"}), "complements": frozenset(), "adjuncts": frozenset(), "fusion_relations": frozenset({"id", "type", "fused_element", "whole_constituent", "relative_clause", "fused_functions", "external_function", "dependency"}), "typed_analysis": frozenset({"kind", "framework", "arguments", "entities", "relations"})},
-    "framework_mapping": {"framework": frozenset({"preferred", "notes"})},
-    "ambiguity": {"ambiguity": frozenset({"status", "preferred_analysis", "analyses"})},
-    "alternative_analyses": {"alternative_analyses": frozenset()},
-    "error_diagnosis": {"error_diagnosis": frozenset()},
+    name: dict(spec.property_map)
+    for name, spec in DIMENSION_REGISTRY.items()
 }
 GOVERNANCE_FIELDS = {
     "schema_version", "id", "split", "source_type", "difficulty", "capability_tags", "annotation_scope",
@@ -620,7 +607,7 @@ def _project_alternatives(record: dict[str, Any], projection: dict[str, Any], re
         links = []
         for field in ("linked_wrapper_ids", "linked_constituent_ids", "linked_clause_refs", "linked_relation_ids"):
             links.extend(value.get(field, []) if isinstance(value.get(field), list) else [])
-        covered = _record_state(record, ("construction_relations", "ambiguity", "alternative_analyses")) in {CoverageState.COMPLETE, CoverageState.CONFIRMED_EMPTY} or any(isinstance(link, str) and _any_covered(record, ("construction_relations", "ambiguity"), link) for link in links)
+        covered = _record_state(record, ("construction_relations",)) in {CoverageState.COMPLETE, CoverageState.CONFIRMED_EMPTY} or any(isinstance(link, str) and _any_covered(record, ("construction_relations",), link) for link in links)
         if not covered:
             continue
         item = _without_governance(value, "alternative_analysis", rendering_mode=rendering_mode)
@@ -714,16 +701,7 @@ def linguistic_projection(record: dict[str, Any], *, include_governance: bool = 
         value = _project_id_list(record, field, dimensions, rendering_mode)
         if value is not None:
             projection[field] = value
-    scalar_dimensions = {
-        "framework": ("framework_mapping",), "sentence_type": ("clause_structure", "clause_ontology"),
-        "sentence_type_metadata": ("clause_structure", "clause_ontology"), "sentence_classification": ("clause_structure", "clause_ontology"),
-        "construction_type": ("clause_structure", "vp_complementation", "construction_relations"),
-        "construction_signature": ("construction_relations", "vp_complementation", "lexical_valency"),
-        "construction_tags": ("construction_relations", "clause_structure"), "pedagogical_aliases": ("framework_mapping",),
-        "fusion_relations": ("construction_relations",), "ambiguity": ("ambiguity", "construction_relations"),
-        "rejected_analyses": ("construction_relations", "ambiguity"), "error_diagnosis": ("error_diagnosis",),
-        "explanation": ("clause_structure", "phrase_constituency", "syntactic_function"), "rationale": ("clause_structure", "phrase_constituency", "syntactic_function"),
-    }
+    scalar_dimensions = PROJECTION_FIELD_DIMENSIONS
     for field, dimensions in scalar_dimensions.items():
         if field not in record:
             continue

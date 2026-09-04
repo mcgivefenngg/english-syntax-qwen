@@ -102,7 +102,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["dimension", "scope", "completeness", "omission"],
       "properties": {
-        "dimension": {"type": "string", "minLength": 1},
+        "dimension": {"enum": ["tokens", "lexical_category", "phrase_constituency", "constituency", "np_internal_constituency", "clause_ontology", "clause_structure", "syntactic_function", "vp_complementation", "dependencies", "semantic_roles", "lexical_valency", "framework_mapping", "construction_relations"]},
         "scope": {"$ref": "#/$defs/coverageScope"},
         "completeness": {"enum": ["complete", "partial", "unannotated", "omitted", "out_of_scope"]},
         "omission": {"enum": ["none", "intentional", "not_applicable"]},

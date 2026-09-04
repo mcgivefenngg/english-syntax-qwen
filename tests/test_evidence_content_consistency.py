@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from typing import Any
 
-from scripts.coverage_resolution import CoverageState, resolve_coverage
+from scripts.coverage_resolution import CoverageResolutionError, CoverageState, resolve_coverage
 from scripts.data_common import read_jsonl
 from scripts.migrate_v021 import migrate
 from scripts.render_sft import linguistic_projection
@@ -148,25 +148,26 @@ class EvidenceContentConsistencyTests(unittest.TestCase):
         self.assertEqual(validate_record(unannotated, "valency-unannotated"), [])
         self.assertNotIn("lexical_valency", linguistic_projection(unannotated))
 
-    def test_different_scopes_can_have_different_evidence_states(self) -> None:
+    def test_dependencies_nonrecord_scopes_are_rejected(self) -> None:
         record = copy.deepcopy(FIXTURE)
         record["dependencies"] = [{"relation": "selected", "head": "w2", "dependent": "subj"}]
         record["annotation_scope"]["dimensions"] = [
             declaration("dependencies", {"kind": "node", "node": "subj"}),
             declaration("dependencies", {"kind": "node", "node": "obj"}, evidence="empty"),
         ]
-        self.assertEqual(validate_record(record, "scoped-evidence"), [])
-        self.assertIs(resolve_coverage(record, "dependencies", "subj"), CoverageState.COMPLETE)
-        self.assertIs(resolve_coverage(record, "dependencies", "obj"), CoverageState.CONFIRMED_EMPTY)
+        errors = validate_record(record, "scoped-evidence")
+        self.assertTrue(all("dependencies" in error and "scope" in error for error in errors))
+        with self.assertRaises(CoverageResolutionError):
+            resolve_coverage(record, "dependencies", "subj")
 
     def test_omitted_scope_is_not_confirmed_empty(self) -> None:
-        entry = declaration("dependencies", {"kind": "node", "node": "obj"}, "omitted", "intentional", "unannotated")
+        entry = declaration("dependencies", {"kind": "record"}, "omitted", "intentional", "unannotated")
         record = record_with("dependencies", entry, [])
         self.assertEqual(validate_record(record, "omitted-scope"), [])
         self.assertIs(resolve_coverage(record, "dependencies", "obj"), CoverageState.OMITTED)
 
     def test_omitted_scope_content_is_rejected(self) -> None:
-        entry = declaration("dependencies", {"kind": "node", "node": "obj"}, "omitted", "intentional", "unannotated")
+        entry = declaration("dependencies", {"kind": "record"}, "omitted", "intentional", "unannotated")
         record = record_with("dependencies", entry, [DEPENDENCY])
         errors = validate_record(record, "omitted-scope-content")
         self.assertTrue(any("unannotated/omitted" in error and "dependencies" in error for error in errors))
@@ -175,9 +176,10 @@ class EvidenceContentConsistencyTests(unittest.TestCase):
         record = copy.deepcopy(FIXTURE)
         record["dependencies"] = [{"relation": "selected", "head": "w2", "dependent": "subj"}]
         entries = [
-            declaration("dependencies", {"kind": "node", "node": "subj"}),
-            declaration("dependencies", {"kind": "node", "node": "obj"}, evidence="empty"),
+            declaration("dependencies", {"kind": "record"}),
+            declaration("semantic_roles", {"kind": "record"}, "omitted", "intentional", "unannotated"),
         ]
+        record["semantic_roles"] = []
         forward = copy.deepcopy(record)
         reverse = copy.deepcopy(record)
         forward["annotation_scope"]["dimensions"] = entries

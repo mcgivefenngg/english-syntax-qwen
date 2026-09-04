@@ -9,6 +9,11 @@ import unicodedata
 from pathlib import Path
 from typing import Any, Iterable
 
+try:
+    from dimension_registry import CANONICAL_DIMENSIONS
+except ImportError:
+    from scripts.dimension_registry import CANONICAL_DIMENSIONS
+
 
 CAPABILITY_TAGS = {
     "basic_constituency", "clause_structure", "pos", "phrase_category", "syntactic_function",
@@ -66,11 +71,7 @@ CLAUSE_STATUSES = CLAUSE_INTEGRATIONS | {"supplement"}
 CLAUSE_FINITE_VALUES = {"finite", "nonfinite", "verbless", "unspecified"}
 CLAUSE_FORMS = {"to_infinitival", "bare_infinitival", "gerund_participial", "past_participial", "unspecified"}
 ANNOTATION_COVERAGES = {"complete_constituency", "task_focused_partial"}
-ANNOTATED_DIMENSIONS = {
-    "tokens", "lexical_category", "phrase_constituency", "constituency", "clause_ontology", "clause_structure",
-    "syntactic_function", "vp_complementation", "np_internal_constituency", "dependencies", "semantic_roles",
-    "lexical_valency", "framework_mapping", "construction_relations",
-}
+ANNOTATED_DIMENSIONS = CANONICAL_DIMENSIONS
 NODE_KINDS = {"word", "phrase", "clause"}
 AMBIGUITY_STATUSES = {
     "unambiguous", "genuinely_ambiguous", "multiple_established_analyses_with_preferred_reading",

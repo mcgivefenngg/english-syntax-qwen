@@ -49,6 +49,11 @@ except ImportError:
         coverage_scope_key, resolve_coverage, resolve_scoring_eligibility,
     )
 
+try:
+    from dimension_registry import CAPABILITY_DIMENSIONS, dimension_spec
+except ImportError:
+    from scripts.dimension_registry import CAPABILITY_DIMENSIONS, dimension_spec
+
 
 REQUIRED = {
     "schema_version", "id", "sentence", "capability_tags", "difficulty", "source_type",
@@ -79,34 +84,6 @@ ALTERNATIVE_LINK_FIELDS = {
 AMBIGUITY_LINK_FIELDS = {
     "alternative_ids", "wrapper_ids", "relation_ids", "constituent_ids", "clause_refs",
 }
-CAPABILITY_DIMENSIONS = {
-    "basic_constituency": {"phrase_constituency", "constituency"},
-    "phrase_category": {"phrase_constituency", "constituency"},
-    "pos": {"lexical_category"},
-    "syntactic_function": {"syntactic_function"},
-    "complement_adjunct": {"syntactic_function", "vp_complementation"},
-    "lexical_valency": {"lexical_valency", "vp_complementation"},
-    "clause_structure": {"clause_ontology", "clause_structure"},
-    "relative_clause": {"clause_ontology", "clause_structure"},
-    "interrogative_clause": {"clause_ontology", "clause_structure"},
-    "nonfinite_clause": {"clause_ontology", "clause_structure"},
-    "gerund_participial": {"clause_ontology", "clause_structure"},
-    "infinitival": {"clause_ontology", "clause_structure"},
-    "semantic_roles": {"semantic_roles"},
-    "framework_distinction": {"framework_mapping"},
-    "coordination": {"construction_relations", "clause_ontology"},
-    "fused_relative": {"construction_relations", "clause_ontology"},
-    "control": {"clause_ontology", "lexical_valency", "vp_complementation"},
-    "raising": {"clause_ontology", "lexical_valency", "vp_complementation"},
-    "ecm": {"clause_ontology", "lexical_valency", "vp_complementation"},
-    "perception_construction": {"clause_ontology", "lexical_valency", "vp_complementation"},
-    "predicative_complement": {"syntactic_function", "lexical_valency", "vp_complementation"},
-    "pp_attachment": {"phrase_constituency", "syntactic_function"},
-    "ambiguity": {"phrase_constituency", "clause_ontology", "construction_relations"},
-    "error_diagnosis": {"syntactic_function", "clause_ontology", "framework_mapping"},
-}
-
-
 @lru_cache(maxsize=4)
 def _schema_validator(schema_path_value: str | None = None) -> Any:
     if Draft202012Validator is None:
@@ -708,8 +685,8 @@ def _validate_coverage(record: dict[str, Any], location: str, errors: list[str])
     legacy_omitted = set(scope.get("intentionally_omitted", [])) if isinstance(scope.get("intentionally_omitted"), list) else set()
     if "annotated_dimensions" in scope and (not isinstance(scope.get("annotated_dimensions"), list) or any(not _known(value, ANNOTATED_DIMENSIONS) for value in scope.get("annotated_dimensions", []))):
         _error(errors, f"{location}.annotation_scope", "annotated_dimensions contains an unknown dimension")
-    if "intentionally_omitted" in scope and (not isinstance(scope.get("intentionally_omitted"), list) or any(not isinstance(value, str) or not value.strip() for value in scope.get("intentionally_omitted", []))):
-        _error(errors, f"{location}.annotation_scope", "intentionally_omitted must contain non-empty dimension names")
+    if "intentionally_omitted" in scope and (not isinstance(scope.get("intentionally_omitted"), list) or any(not _known(value, ANNOTATED_DIMENSIONS) for value in scope.get("intentionally_omitted", []))):
+        _error(errors, f"{location}.annotation_scope", "intentionally_omitted contains an unknown dimension")
     overlap = legacy_annotated & legacy_omitted
     if overlap:
         _error(errors, f"{location}.annotation_scope", f"legacy coverage summaries conflict for dimensions: {sorted(overlap)}")
@@ -722,7 +699,8 @@ def _validate_coverage(record: dict[str, Any], location: str, errors: list[str])
             _error(errors, entry_location, "coverage dimension must be an object")
             continue
         dimension = entry.get("dimension")
-        if not _known(dimension, ANNOTATED_DIMENSIONS):
+        spec = dimension_spec(dimension)
+        if spec is None:
             _error(errors, entry_location, "unknown coverage dimension")
             continue
         coverage_scope = entry.get("scope")
@@ -745,17 +723,10 @@ def _validate_coverage(record: dict[str, Any], location: str, errors: list[str])
         by_dimension.setdefault(dimension, []).append(entry)
     for dimension, entries_for_dimension in by_dimension.items():
         annotated = [entry for entry in entries_for_dimension if entry.get("omission") == "none"]
-        dimension_fields = {
-            "tokens": "words", "lexical_category": "words", "phrase_constituency": "constituents",
-            "constituency": "constituents", "np_internal_constituency": "constituents",
-            "clause_ontology": "clauses", "clause_structure": "clauses", "syntactic_function": "constituents",
-            "dependencies": "dependencies", "semantic_roles": "semantic_roles",
-            "lexical_valency": "lexical_valency", "vp_complementation": "constituents",
-            "framework_mapping": "framework",
-        }
-        field = dimension_fields.get(dimension)
-        if annotated and field is not None and field not in record:
-            _error(errors, f"{location}.annotation_scope", f"annotated dimension {dimension!r} requires field {field!r}")
+        spec = dimension_spec(dimension)
+        fields = spec.fields if spec is not None else frozenset()
+        if annotated and spec is not None and spec.requires_payload_field and fields and not any(field in record for field in fields):
+            _error(errors, f"{location}.annotation_scope", f"annotated dimension {dimension!r} requires one of fields {sorted(fields)!r}")
     if coverage == "complete_constituency":
         required_dimensions = {"tokens", "lexical_category", "phrase_constituency", "clause_ontology", "syntactic_function"}
         declared = {dimension for dimension, values in by_dimension.items() if any(value.get("omission") == "none" for value in values)}
