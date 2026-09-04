@@ -331,8 +331,12 @@ def normalize_collection_item(record: dict[str, Any], dimension: str, item: Any)
     if not isinstance(item, dict):
         return None
     spec = dimension_spec(dimension)
-    if spec is None or not spec.target_lemma_field or spec.target_lemma_field not in item:
+    if spec is None:
+        return None
+    if not spec.target_lemma_field:
         return dict(item)
+    if spec.target_lemma_field not in item:
+        return dict(item) if spec.target_lemma_optional else None
     target = normalize_predicate_reference(record, item.get(spec.target_lemma_field))
     if target is None:
         return None

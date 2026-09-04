@@ -102,7 +102,7 @@ class MigrationSafetyTests(unittest.TestCase):
         record["lexical_valency"] = [VALENCY]
         record["annotation_scope"] = {
             "coverage": "task_focused_partial",
-            "dimensions": [declaration("lexical_valency", {"kind": "node", "node": "w2"})],
+            "dimensions": [declaration("lexical_valency", {"kind": "node", "node": "w2"}, evidence="present")],
         }
         migrate(record)
         entry = next(item for item in record["annotation_scope"]["dimensions"] if item["dimension"] == "lexical_valency")
@@ -147,6 +147,171 @@ class MigrationSafetyTests(unittest.TestCase):
         self.assertEqual(entry["evidence"], "unannotated")
         self.assertNotEqual(entry["evidence"], "empty")
         self.assertEqual(validate_record(record, "capability-empty-safety"), [])
+
+    def test_missing_evidence_does_not_use_global_collection_presence(self) -> None:
+        cases = (
+            ("dependencies", DEPENDENCY),
+            ("semantic_roles", ROLE),
+            ("lexical_valency", VALENCY),
+        )
+        for dimension, item in cases:
+            with self.subTest(dimension=dimension):
+                record = self.legacy_record()
+                record[dimension] = [item]
+                record["annotation_scope"] = {
+                    "coverage": "task_focused_partial",
+                    "dimensions": [declaration(dimension, {"kind": "record"})],
+                }
+                migrate(record)
+                entry = next(item for item in record["annotation_scope"]["dimensions"] if item["dimension"] == dimension)
+                self.assertEqual((entry["completeness"], entry["evidence"]), ("unannotated", "unannotated"))
+                self.assertEqual(record[dimension], [])
+                self.assertTrue(record["migration_review_required"])
+                self.assertEqual(validate_record(record, f"missing-evidence-{dimension}"), [])
+
+    def test_record_partial_dependency_missing_evidence_remains_unresolved(self) -> None:
+        record = self.legacy_record()
+        record["dependencies"] = [DEPENDENCY]
+        record["annotation_scope"] = {
+            "coverage": "task_focused_partial",
+            "dimensions": [declaration("dependencies", {"kind": "record"}, completeness="partial")],
+        }
+        migrate(record)
+        entry = next(item for item in record["annotation_scope"]["dimensions"] if item["dimension"] == "dependencies")
+        self.assertEqual((entry["completeness"], entry["omission"], entry["evidence"]), ("unannotated", "intentional", "unannotated"))
+        self.assertEqual(record["dependencies"], [])
+        self.assertEqual(validate_record(record, "partial-missing-evidence"), [])
+
+    def test_capability_tag_and_nonempty_collection_do_not_create_present(self) -> None:
+        record = self.legacy_record()
+        record["capability_tags"] = ["semantic_roles"]
+        record["semantic_roles"] = [ROLE]
+        record.pop("annotation_scope", None)
+        migrate(record)
+        entry = next(item for item in record["annotation_scope"]["dimensions"] if item["dimension"] == "semantic_roles")
+        self.assertEqual(entry["evidence"], "unannotated")
+        self.assertEqual(record["semantic_roles"], [])
+        self.assertIn("semantic_roles_unscoped", record["legacy_annotations"])
+        self.assertEqual(validate_record(record, "capability-content-safety"), [])
+
+    def test_semantic_role_without_optional_predicate_is_preserved(self) -> None:
+        for transform in (migrate, repair_record):
+            with self.subTest(transform=transform.__name__):
+                record = self.legacy_record() if transform is migrate else copy.deepcopy(FIXTURE)
+                record["semantic_roles"] = [{"constituent": "obj", "role": "Theme"}]
+                record["annotation_scope"] = {
+                    "coverage": "task_focused_partial",
+                    "dimensions": [declaration("semantic_roles", {"kind": "record"}, evidence="present")],
+                }
+                transform(record)
+                self.assertEqual(record["semantic_roles"], [{"constituent": "obj", "role": "Theme"}])
+                self.assertEqual(validate_record(record, f"optional-role-{transform.__name__}"), [])
+
+    def test_semantic_role_predicate_unique_lemma_or_form_normalizes(self) -> None:
+        for field, reference in (("lemma", "catalogue"), ("form", "catalogued")):
+            for transform in (migrate, repair_record):
+                with self.subTest(field=field, transform=transform.__name__):
+                    record = self.legacy_record() if transform is migrate else copy.deepcopy(FIXTURE)
+                    record["semantic_roles"] = [{"constituent": "obj", "role": "Theme", "predicate": reference}]
+                    record["annotation_scope"] = {
+                        "coverage": "task_focused_partial",
+                        "dimensions": [declaration("semantic_roles", {"kind": "record"}, evidence="present")],
+                    }
+                    transform(record)
+                    self.assertEqual(record["semantic_roles"][0]["predicate"], "w2")
+                    self.assertEqual(validate_record(record, f"unique-role-{transform.__name__}"), [])
+
+    def test_semantic_role_duplicate_lemma_or_form_remains_unresolved(self) -> None:
+        for field, reference in (("lemma", "catalogue"), ("form", "catalogued")):
+            for transform in (migrate, repair_record):
+                with self.subTest(field=field, transform=transform.__name__):
+                    record = self.legacy_record() if transform is migrate else copy.deepcopy(FIXTURE)
+                    record["words"][4][field] = reference
+                    if field == "form":
+                        record["sentence"] = "The archivist catalogued the catalogued."
+                    record["semantic_roles"] = [{"constituent": "obj", "role": "Theme", "predicate": reference}]
+                    record["annotation_scope"] = {
+                        "coverage": "task_focused_partial",
+                        "dimensions": [declaration("semantic_roles", {"kind": "record"}, evidence="present")],
+                    }
+                    transform(record)
+                    self.assertEqual(record["semantic_roles"], [])
+                    self.assertIn("semantic_roles_unresolved_references", record["legacy_annotations"])
+                    self.assertTrue(record["migration_review_required"])
+                    self.assertEqual(validate_record(record, f"ambiguous-role-{transform.__name__}"), [])
+
+    def _construction_record(self, transform: Any, field: str, value: Any, evidence: str | None = None) -> dict[str, Any]:
+        record = self.legacy_record() if transform is migrate else copy.deepcopy(FIXTURE)
+        record[field] = copy.deepcopy(value)
+        if evidence is not None:
+            record["annotation_scope"] = {
+                "coverage": "task_focused_partial",
+                "dimensions": [declaration("construction_relations", {"kind": "record"}, evidence=evidence)],
+            }
+        return record
+
+    def test_uncovered_construction_payload_is_quarantined_across_migration_and_repair(self) -> None:
+        payloads = (
+            ("construction_signature", {"predicate_lemma": "catalogue", "construction_type": "transitive", "argument_pattern": ["NP"], "function_pattern": ["object"]}),
+            ("construction_type", "transitive"),
+            ("construction_tags", ["transitive"]),
+            ("heads", [{"head": "w2", "dependent": "obj", "relation": "selects"}]),
+            ("fusion_relations", [{"id": "fusion", "type": "fused_relative", "fused_element": "w2", "whole_constituent": "subj", "relative_clause": "c0", "fused_functions": ["nominal", "relativized"]}]),
+        )
+        for field, value in payloads:
+            for transform in (migrate, repair_record):
+                with self.subTest(field=field, transform=transform.__name__):
+                    record = self._construction_record(transform, field, value)
+                    transform(record)
+                    if isinstance(value, list):
+                        self.assertEqual(record[field], [])
+                    else:
+                        self.assertNotIn(field, record)
+                    self.assertIn(f"{field}_unscoped", record["legacy_annotations"])
+                    self.assertTrue(record["migration_review_required"])
+                    self.assertEqual(validate_record(record, f"construction-{field}"), [])
+
+    def test_uncovered_typed_construction_relation_is_quarantined(self) -> None:
+        relation = {
+            "id": "rel-construction",
+            "type": "construction",
+            "arity": "binary",
+            "source": {"namespace": "word", "id": "w2"},
+            "target": {"namespace": "constituent", "id": "obj"},
+        }
+        for transform in (migrate, repair_record):
+            with self.subTest(transform=transform.__name__):
+                record = self.legacy_record() if transform is migrate else copy.deepcopy(FIXTURE)
+                record["canonical_analysis"]["typed_analysis"]["status"] = "established"
+                record["canonical_analysis"]["typed_analysis"]["relations"] = [relation]
+                transform(record)
+                self.assertEqual(record["canonical_analysis"]["typed_analysis"]["relations"], [])
+                self.assertEqual(record["legacy_annotations"]["typed_relation_unscoped"], [relation])
+                self.assertTrue(record["migration_review_required"])
+                self.assertEqual(validate_record(record, f"typed-construction-{transform.__name__}"), [])
+
+    def test_unannotated_construction_declaration_does_not_retain_payload(self) -> None:
+        for completeness, omission, evidence in (("unannotated", "intentional", "unannotated"), ("omitted", "intentional", "unannotated")):
+            for transform in (migrate, repair_record):
+                with self.subTest(completeness=completeness, transform=transform.__name__):
+                    record = self._construction_record(transform, "construction_type", "transitive")
+                    record["annotation_scope"] = {
+                        "coverage": "task_focused_partial",
+                        "dimensions": [declaration("construction_relations", {"kind": "record"}, completeness, omission, evidence)],
+                    }
+                    transform(record)
+                    self.assertNotIn("construction_type", record)
+                    self.assertIn("construction_type_unscoped", record["legacy_annotations"])
+                    self.assertEqual(validate_record(record, f"uncovered-construction-{transform.__name__}"), [])
+
+    def test_valid_covered_construction_payload_is_preserved(self) -> None:
+        for transform in (migrate, repair_record):
+            with self.subTest(transform=transform.__name__):
+                record = self._construction_record(transform, "construction_type", "transitive", evidence="present")
+                transform(record)
+                self.assertEqual(record["construction_type"], "transitive")
+                self.assertNotIn("construction_type_unscoped", record.get("legacy_annotations", {}))
+                self.assertEqual(validate_record(record, f"covered-construction-{transform.__name__}"), [])
 
     def test_migration_downgrades_complete_intentional_unannotated(self) -> None:
         record = self.migrate_with([
@@ -205,7 +370,7 @@ class MigrationSafetyTests(unittest.TestCase):
         migrated["lexical_valency"] = [VALENCY]
         migrated["annotation_scope"] = {
             "coverage": "task_focused_partial",
-            "dimensions": [declaration("lexical_valency", {"kind": "node", "node": "w2"})],
+            "dimensions": [declaration("lexical_valency", {"kind": "node", "node": "w2"}, evidence="present")],
         }
         migrate(migrated)
         self.assertEqual(migrated["lexical_valency"][0]["predicate"], "w2")
@@ -215,7 +380,7 @@ class MigrationSafetyTests(unittest.TestCase):
         repaired["lexical_valency"] = [VALENCY]
         repaired["annotation_scope"] = {
             "coverage": "task_focused_partial",
-            "dimensions": [declaration("lexical_valency", {"kind": "node", "node": "w2"})],
+            "dimensions": [declaration("lexical_valency", {"kind": "node", "node": "w2"}, evidence="present")],
         }
         repair_record(repaired)
         self.assertEqual(repaired["lexical_valency"][0]["predicate"], "w2")
@@ -242,16 +407,39 @@ class MigrationSafetyTests(unittest.TestCase):
                 repair_file(path, manifest)
             self.assertEqual(path.read_text(), before)
 
+    def test_construction_quarantine_writes_only_valid_canonical_output(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "records.jsonl"
+            migrated = self.legacy_record()
+            migrated["construction_type"] = "transitive"
+            path.write_text(json.dumps(migrated) + "\n")
+            migrate_file(path)
+            migrated_output = json.loads(path.read_text().splitlines()[0])
+            self.assertNotIn("construction_type", migrated_output)
+            self.assertEqual(validate_record(migrated_output, "quarantine-migrated-output"), [])
+
+            repaired = copy.deepcopy(FIXTURE)
+            repaired["construction_type"] = "transitive"
+            path.write_text(json.dumps(repaired) + "\n")
+            manifest = Path(directory) / "manifest.json"
+            manifest.write_text(json.dumps({"records": [{"id": repaired["id"], "source_version": "0.4"}]}))
+            repair_file(path, manifest)
+            repaired_output = json.loads(path.read_text().splitlines()[0])
+            self.assertNotIn("construction_type", repaired_output)
+            self.assertEqual(validate_record(repaired_output, "quarantine-repaired-output"), [])
+
     def test_declaration_order_does_not_change_migration_result(self) -> None:
         entries = [
             declaration("dependencies", {"kind": "record"}),
-            declaration("lexical_valency", {"kind": "node", "node": "w2"}),
+            declaration("lexical_valency", {"kind": "node", "node": "w2"}, evidence="present"),
+            declaration("construction_relations", {"kind": "record"}, evidence="present"),
         ]
         forward = self.legacy_record()
         reverse = copy.deepcopy(forward)
         for record in (forward, reverse):
             record["dependencies"] = [DEPENDENCY]
             record["lexical_valency"] = [VALENCY]
+            record["construction_type"] = "transitive"
             record["annotation_scope"] = {"coverage": "task_focused_partial", "dimensions": entries}
         reverse["annotation_scope"]["dimensions"] = list(reversed(entries))
         migrate(forward)

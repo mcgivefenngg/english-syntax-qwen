@@ -209,16 +209,23 @@ not overwritten. Fixture-specific repairs require a strict manifest of exact
 record ids/source versions (and optional hashes), reject reviewed/approved
 records, and are repeat-safe.
 
-Migration and fixture repair do not infer scoped evidence from global
-collection presence. Record-scoped dependency and semantic-role collections
-cannot establish node or region ownership; lexical-valency node coverage is
-supported only by deterministic lexical-head ownership, never by selected
-complement references. Unsupported ownership remains unannotated and
-review-required, with legacy evidence retained. A transformed record must
-pass canonical validation before a file transform is written; otherwise the
-transform fails for manual review. Uncertainty is preferred to invented
-`present` or confirmed-empty metadata: missing, empty, or capability-only
-collections do not establish confirmed emptiness.
+Migration and fixture repair do not infer scoped evidence from global field or
+collection presence. Missing evidence remains unannotated and
+review-required; record-scoped dependency, semantic-role, and lexical-valency
+collections cannot manufacture positive scoped coverage. Lexical-valency node
+coverage is supported only by deterministic lexical-head ownership, never by
+selected complement references. A semantic-role item requires only a valid
+`constituent` and `role`; its optional `predicate` is normalized only when it
+is present, and ambiguous references remain unresolved. Unsupported ownership
+remains unannotated and review-required, with legacy evidence retained.
+Registry-owned construction payload without a valid covered
+`construction_relations` declaration is quarantined instead of silently
+remaining canonical; quarantine preserves original payload and provenance,
+not linguistic certainty. A transformed record must pass canonical validation
+before a file transform is written; otherwise the transform fails for manual
+review. Uncertainty is preferred to invented `present` or confirmed-empty
+metadata: missing, empty, or capability-only collections do not establish
+confirmed emptiness.
 
 ## Open questions
 

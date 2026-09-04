@@ -19,6 +19,7 @@ try:
         canonicalize_coverage_entry,
         normalize_reference_collections,
         quarantine_uncovered_collection_content,
+        retain_migrated_coverage_entry,
         sort_coverage_entries,
         validate_canonical_record,
     )
@@ -27,6 +28,7 @@ except ImportError:
         canonicalize_coverage_entry,
         normalize_reference_collections,
         quarantine_uncovered_collection_content,
+        retain_migrated_coverage_entry,
         sort_coverage_entries,
         validate_canonical_record,
     )
@@ -147,11 +149,10 @@ def _migrate_scope(record: dict[str, Any]) -> bool:
             entry, entry_review = canonicalize_coverage_entry(
                 record,
                 source,
-                infer_missing_evidence=True,
             )
             review_required = review_required or entry_review
             preserve_scope = preserve_scope or entry_review or entry != source
-            if entry is not None:
+            if entry is not None and retain_migrated_coverage_entry(entry):
                 dimensions.append(entry)
         existing = {entry.get("dimension") for entry in dimensions}
         for dimension, field in (
@@ -169,6 +170,7 @@ def _migrate_scope(record: dict[str, Any]) -> bool:
                     "omission": "intentional",
                     "evidence": "unannotated",
                 })
+                review_required = True
         if preserve_scope and "legacy_annotation_scope" not in record:
             legacy_scope = copy.deepcopy(old_scope)
             if isinstance(legacy_scope.get("dimensions"), list) and all(isinstance(entry, dict) for entry in legacy_scope["dimensions"]):
@@ -188,12 +190,12 @@ def _migrate_scope(record: dict[str, Any]) -> bool:
             record["legacy_annotation_scope"] = copy.deepcopy(old_scope)
     dimensions: list[dict[str, Any]] = []
     declared = set(old_scope.get("annotated_dimensions", [])) if isinstance(old_scope, dict) and isinstance(old_scope.get("annotated_dimensions"), list) else set()
-    for dimension, field in (("tokens", "words"), ("lexical_category", "words"), ("phrase_constituency", "constituents"), ("clause_ontology", "clauses"), ("syntactic_function", "constituents")):
-        if isinstance(record.get(field), list) and record[field] or dimension in declared:
+    for dimension in ("tokens", "lexical_category", "phrase_constituency", "clause_ontology", "syntactic_function"):
+        if dimension in declared:
             source = {"dimension": dimension, "scope": {"kind": "record"}, "completeness": "partial", "omission": "none"}
-            entry, entry_review = canonicalize_coverage_entry(record, source, infer_missing_evidence=True)
+            entry, entry_review = canonicalize_coverage_entry(record, source)
             review_required = review_required or entry_review
-            if entry is not None:
+            if entry is not None and retain_migrated_coverage_entry(entry):
                 dimensions.append(entry)
     for dimension, field in (
         ("dependencies", "dependencies"),
@@ -202,9 +204,9 @@ def _migrate_scope(record: dict[str, Any]) -> bool:
     ):
         if dimension in declared:
             source = {"dimension": dimension, "scope": {"kind": "record"}, "completeness": "partial", "omission": "none"}
-            entry, entry_review = canonicalize_coverage_entry(record, source, infer_missing_evidence=True)
+            entry, entry_review = canonicalize_coverage_entry(record, source)
             review_required = review_required or entry_review
-            if entry is not None:
+            if entry is not None and retain_migrated_coverage_entry(entry):
                 dimensions.append(entry)
             continue
         if dimension == "dependencies" or field in record or dimension in record.get("capability_tags", []):
@@ -217,6 +219,7 @@ def _migrate_scope(record: dict[str, Any]) -> bool:
                 "omission": "intentional",
                 "evidence": "unannotated",
             })
+            review_required = True
     dimensions = sort_coverage_entries(dimensions)
     review_required = quarantine_uncovered_collection_content(record, dimensions) or review_required
     record["annotation_scope"] = {

@@ -19,6 +19,7 @@ try:
         canonicalize_coverage_entry,
         normalize_reference_collections,
         quarantine_uncovered_collection_content,
+        retain_migrated_coverage_entry,
         sort_coverage_entries,
         validate_canonical_record,
     )
@@ -27,6 +28,7 @@ except ImportError:
         canonicalize_coverage_entry,
         normalize_reference_collections,
         quarantine_uncovered_collection_content,
+        retain_migrated_coverage_entry,
         sort_coverage_entries,
         validate_canonical_record,
     )
@@ -147,21 +149,20 @@ def repair_record(record: dict[str, Any]) -> dict[str, Any]:
             entry, entry_review = canonicalize_coverage_entry(
                 record,
                 source,
-                infer_missing_evidence=True,
             )
             review_required = review_required or entry_review
             preserve_scope = preserve_scope or entry_review or entry != source
-            if entry is not None:
+            if entry is not None and retain_migrated_coverage_entry(entry):
                 dimensions.append(entry)
     else:
         old_dimensions = old_scope.get("annotated_dimensions", []) if isinstance(old_scope, dict) else []
         dimensions = []
         for dimension in old_dimensions:
             source = {"dimension": dimension, "scope": {"kind": "record"}, "completeness": "partial", "omission": "none"}
-            entry, entry_review = canonicalize_coverage_entry(record, source, infer_missing_evidence=True)
+            entry, entry_review = canonicalize_coverage_entry(record, source)
             review_required = review_required or entry_review
             preserve_scope = preserve_scope or entry_review or entry != source
-            if entry is not None:
+            if entry is not None and retain_migrated_coverage_entry(entry):
                 dimensions.append(entry)
     if preserve_scope and "legacy_annotation_scope" not in record:
         legacy_scope = copy.deepcopy(old_scope)
@@ -188,6 +189,7 @@ def repair_record(record: dict[str, Any]) -> dict[str, Any]:
                 "omission": "intentional",
                 "evidence": "unannotated",
             })
+            review_required = True
     dimensions = sort_coverage_entries(dimensions)
     review_required = quarantine_uncovered_collection_content(record, dimensions) or review_required
     record["annotation_scope"] = {

@@ -35,10 +35,9 @@ class OntologyV04Tests(unittest.TestCase):
         self.assertEqual(source["schema_version"], "0.2")
         migrate(source)
         self.assertEqual(source["schema_version"], "0.4")
-        self.assertTrue(any(
-            "clause_ontology" in error and "resolved authoritative" in error
-            for error in validate_record(source, "migrated")
-        ))
+        self.assertEqual(source["clauses"][0]["clause_construction"], "unresolved")
+        self.assertTrue(source["migration_review_required"])
+        self.assertEqual(validate_record(source, "migrated"), [])
 
     def test_v04_migration_is_exact_noop_and_unknown_rejected(self) -> None:
         record = copy.deepcopy(FIXTURE)

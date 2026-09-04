@@ -79,10 +79,8 @@ class DataPipelineTests(unittest.TestCase):
         migrate(legacy)
         self.assertEqual(legacy["schema_version"], "0.4")
         self.assertEqual(legacy["clauses"][0]["clause_construction"], "unresolved")
-        self.assertTrue(any(
-            "clause_ontology" in error and "resolved authoritative" in error
-            for error in validate_record(legacy, "migrated")
-        ))
+        self.assertTrue(legacy["migration_review_required"])
+        self.assertEqual(validate_record(legacy, "migrated"), [])
         migrated_once = copy.deepcopy(legacy)
         migrate(legacy)
         self.assertEqual(legacy, migrated_once)

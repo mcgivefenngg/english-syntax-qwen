@@ -39,6 +39,7 @@ class DimensionSpec:
     content_field: str | None = None
     target_fields: tuple[str, ...] = ()
     target_lemma_field: str | None = None
+    target_lemma_optional: bool = False
     target_owner: str | None = None
 
     @property
@@ -90,6 +91,7 @@ def _spec(
     content_field: str | None = None,
     target_fields: tuple[str, ...] = (),
     target_lemma_field: str | None = None,
+    target_lemma_optional: bool = False,
     target_owner: str | None = None,
 ) -> DimensionSpec:
     return DimensionSpec(
@@ -107,6 +109,7 @@ def _spec(
         content_field=content_field,
         target_fields=target_fields,
         target_lemma_field=target_lemma_field,
+        target_lemma_optional=target_lemma_optional,
         target_owner=target_owner,
     )
 
@@ -213,7 +216,7 @@ _DIMENSIONS = {
             _payload("semantic_roles", "constituent", "role", "predicate"),
             _payload("typed_arguments", "role"),
             _payload("typed_relation", "role"),
-        ), content_field="semantic_roles", target_fields=("constituent", "predicate"), target_lemma_field="predicate",
+        ), content_field="semantic_roles", target_fields=("constituent", "predicate"), target_lemma_field="predicate", target_lemma_optional=True,
     ),
     "lexical_valency": _spec(
         "lexical_valency", scopes={"record", "node"}, nodes={"word"},

@@ -75,6 +75,17 @@ class AuthoritativePayload:
         )
 
 
+@dataclass(frozen=True)
+class AuthoritativePayloadItem:
+    """One registry-owned payload item and its canonicalization status."""
+
+    field: str
+    identifier: str
+    value: Any
+    status: str
+    path: tuple[str | int, ...]
+
+
 @dataclass
 class _PayloadAccumulator:
     applicable_count: int = 0
@@ -607,6 +618,128 @@ def _collect_construction(record: dict[str, Any], spec: DimensionSpec, accumulat
                 ) else "missing"
             accumulator.add(f"{field_name}[{index}]", field_name, status)
     _typed_relation_items(record, spec, {"kind": "record"}, accumulator)
+
+
+def _construction_payload_item_status(record: dict[str, Any], field_name: str, value: Any) -> str:
+    objects = _record_objects(record)
+    if field_name == "construction_signature":
+        return _construction_signature_status(value)
+    if field_name == "construction_type":
+        return "resolved" if isinstance(value, str) and value else "missing"
+    if field_name == "construction_tags":
+        return "resolved" if isinstance(value, list) and any(isinstance(item, str) and item for item in value) else "missing"
+    if field_name == "heads":
+        return "resolved" if (
+            isinstance(value, dict)
+            and isinstance(value.get("head"), str)
+            and value["head"] in objects
+            and isinstance(value.get("dependent"), str)
+            and value["dependent"] in objects
+        ) else "missing"
+    if field_name in {"complements", "adjuncts"}:
+        return "resolved" if isinstance(value, str) and value in objects else "missing"
+    if field_name == "fusion_relations":
+        required = ("id", "type", "fused_element", "whole_constituent", "relative_clause", "fused_functions")
+        return "resolved" if (
+            isinstance(value, dict)
+            and isinstance(value.get("id"), str)
+            and isinstance(value.get("type"), str)
+            and isinstance(value.get("fused_element"), str)
+            and value["fused_element"] in objects
+            and isinstance(value.get("whole_constituent"), str)
+            and value["whole_constituent"] in objects
+            and isinstance(value.get("relative_clause"), str)
+            and value["relative_clause"] in objects
+            and isinstance(value.get("fused_functions"), list)
+            and len(value["fused_functions"]) >= 2
+            and all(isinstance(function, str) and function for function in value["fused_functions"])
+        ) else "missing"
+    return "missing"
+
+
+def _typed_analysis_paths(record: dict[str, Any]) -> list[tuple[tuple[str | int, ...], dict[str, Any]]]:
+    paths: list[tuple[tuple[str | int, ...], dict[str, Any]]] = []
+    for field_name in ("canonical_analysis", "preferred_analysis"):
+        analysis = record.get(field_name)
+        if isinstance(analysis, dict) and isinstance(analysis.get("typed_analysis"), dict):
+            paths.append(((field_name, "typed_analysis"), analysis["typed_analysis"]))
+    alternatives = record.get("alternative_analyses")
+    if isinstance(alternatives, list):
+        for index, analysis in enumerate(alternatives):
+            if isinstance(analysis, dict) and isinstance(analysis.get("typed_analysis"), dict):
+                paths.append((("alternative_analyses", index, "typed_analysis"), analysis["typed_analysis"]))
+    return paths
+
+
+def authoritative_payload_items(record: dict[str, Any], dimension: str) -> tuple[AuthoritativePayloadItem, ...]:
+    """Enumerate registry-owned construction payload for quarantine callers."""
+    spec = dimension_spec(dimension)
+    if spec is None or spec.payload_family != "construction_relation_collection":
+        return ()
+    items: list[AuthoritativePayloadItem] = []
+    nested_fields = {"typed_analysis", "typed_arguments", "typed_entity", "typed_relation"}
+    top_level_fields = {
+        payload.field for payload in spec.payloads
+        if payload.field not in nested_fields
+    }
+    for payload in spec.payloads:
+        field_name = payload.field
+        if field_name not in top_level_fields or field_name not in record:
+            continue
+        value = record[field_name]
+        if field_name == "construction_tags":
+            items.append(AuthoritativePayloadItem(
+                field=field_name,
+                identifier=field_name,
+                value=value,
+                status=_construction_payload_item_status(record, field_name, value),
+                path=(field_name,),
+            ))
+        elif isinstance(value, list):
+            for index, item in enumerate(value):
+                items.append(AuthoritativePayloadItem(
+                    field=field_name,
+                    identifier=f"{field_name}[{index}]",
+                    value=item,
+                    status=_construction_payload_item_status(record, field_name, item),
+                    path=(field_name, index),
+                ))
+        else:
+            items.append(AuthoritativePayloadItem(
+                field=field_name,
+                identifier=field_name,
+                value=value,
+                status=_construction_payload_item_status(record, field_name, value),
+                path=(field_name,),
+            ))
+    relation_specs = [
+        payload for payload in spec.payloads
+        if payload.field == "typed_relation" and payload.relation_types
+    ]
+    relation_types = set().union(*(payload.relation_types for payload in relation_specs)) if relation_specs else set()
+    for analysis_path, typed in _typed_analysis_paths(record):
+        relations = typed.get("relations")
+        if isinstance(relations, list):
+            for index, relation in enumerate(relations):
+                if not isinstance(relation, dict) or relation.get("type") not in relation_types:
+                    continue
+                identifier = relation.get("id") if isinstance(relation.get("id"), str) else f"typed_relation[{index}]"
+                items.append(AuthoritativePayloadItem(
+                    field="typed_relation",
+                    identifier=identifier,
+                    value=relation,
+                    status=_typed_relation_status(typed, relation),
+                    path=analysis_path + ("relations", index),
+                ))
+        elif relations not in (None, {}, []):
+            items.append(AuthoritativePayloadItem(
+                field="typed_relation",
+                identifier="typed_relation",
+                value=relations,
+                status="missing",
+                path=analysis_path + ("relations",),
+            ))
+    return tuple(items)
 
 
 def _collect_dependency_like(record: dict[str, Any], spec: DimensionSpec, accumulator: _PayloadAccumulator, field_name: str) -> None:

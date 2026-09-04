@@ -115,6 +115,8 @@ class DimensionRegistryTests(unittest.TestCase):
         self.assertEqual(DIMENSION_REGISTRY["lexical_valency"].target_owner, "lexical_head_word")
         self.assertEqual(DIMENSION_REGISTRY["dependencies"].partial_present_target_source, "record")
         self.assertEqual(DIMENSION_REGISTRY["semantic_roles"].partial_present_target_source, "record")
+        self.assertTrue(DIMENSION_REGISTRY["semantic_roles"].target_lemma_optional)
+        self.assertFalse(DIMENSION_REGISTRY["lexical_valency"].target_lemma_optional)
 
     def test_semantic_roles_node_and_region_scopes_are_rejected(self) -> None:
         for scope in ({"kind": "node", "node": "obj"}, {"kind": "region", "start": 0, "end": 2}):

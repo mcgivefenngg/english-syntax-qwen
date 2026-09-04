@@ -8,6 +8,7 @@ from typing import Any
 from scripts.authoritative_payload import (
     AuthoritativePayloadState,
     authoritative_payload,
+    authoritative_payload_items,
     authoritative_payload_state,
 )
 from scripts.data_common import read_jsonl
@@ -168,6 +169,43 @@ class AuthoritativePayloadContractTests(unittest.TestCase):
         payload = authoritative_payload(record, "construction_relations")
         self.assertIs(payload.state, AuthoritativePayloadState.PRESENT)
         self.assertEqual(validate_record(record, "construction-payload"), [])
+
+    def test_construction_payload_enumeration_follows_registry_surfaces(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["construction_signature"] = {
+            "predicate_lemma": "catalogue",
+            "construction_type": "transitive",
+            "argument_pattern": ["NP"],
+            "function_pattern": ["object"],
+        }
+        record["construction_type"] = "transitive"
+        record["construction_tags"] = ["transitive"]
+        record["heads"] = [{"head": "w2", "dependent": "obj", "relation": "selects"}]
+        record["fusion_relations"] = [{
+            "id": "fusion",
+            "type": "fused_relative",
+            "fused_element": "w2",
+            "whole_constituent": "subj",
+            "relative_clause": "c0",
+            "fused_functions": ["nominal", "relativized"],
+        }]
+        record["canonical_analysis"]["typed_analysis"]["status"] = "established"
+        record["canonical_analysis"]["typed_analysis"]["relations"] = [typed_relation("construction")]
+        items = authoritative_payload_items(record, "construction_relations")
+        self.assertEqual(
+            {item.field for item in items},
+            {"construction_signature", "construction_type", "construction_tags", "heads", "fusion_relations", "typed_relation"},
+        )
+        self.assertTrue(all(item.status == "resolved" for item in items))
+
+    def test_semantic_role_without_predicate_is_resolved_payload(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["semantic_roles"] = [{"constituent": "obj", "role": "Theme"}]
+        record = with_declaration(record, declaration("semantic_roles", {"kind": "record"}))
+        payload = authoritative_payload(record, "semantic_roles")
+        self.assertIs(payload.state, AuthoritativePayloadState.PRESENT)
+        self.assertTrue(payload.fully_resolved)
+        self.assertEqual(validate_record(record, "optional-predicate"), [])
 
     def test_typed_construction_relation_belongs_to_construction_dimension(self) -> None:
         record = with_declaration(record=FIXTURE, entry=declaration("construction_relations", {"kind": "record"}))

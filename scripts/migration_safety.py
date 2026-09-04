@@ -8,15 +8,18 @@ from typing import Any
 try:
     from collection_contract import collection_item_in_scope, normalize_collection_item, validate_coverage_target
     from dimension_registry import DIMENSION_REGISTRY, dimension_spec
+    from authoritative_payload import authoritative_payload, authoritative_payload_items
 except ImportError:
     from scripts.collection_contract import collection_item_in_scope, normalize_collection_item, validate_coverage_target
     from scripts.dimension_registry import DIMENSION_REGISTRY, dimension_spec
+    from scripts.authoritative_payload import authoritative_payload, authoritative_payload_items
 
 
 _COMPLETENESS = {"complete", "partial", "unannotated", "omitted", "out_of_scope"}
 _OMISSIONS = {"none", "intentional", "not_applicable"}
 _EVIDENCE = {"present", "empty", "unannotated"}
 _EXCLUDED_COMPLETENESS = {"unannotated", "omitted", "out_of_scope"}
+_COLLECTION_COVERAGE_DIMENSIONS = {"dependencies", "semantic_roles", "lexical_valency"}
 _COVERAGE_FIELDS = ("dimension", "scope", "completeness", "omission", "evidence", "notes")
 
 
@@ -52,6 +55,14 @@ def coverage_entry_sort_key(entry: dict[str, Any]) -> tuple[Any, ...]:
 
 def sort_coverage_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(entries, key=coverage_entry_sort_key)
+
+
+def retain_migrated_coverage_entry(entry: dict[str, Any]) -> bool:
+    """Keep unresolved collection declarations explicit for quarantine."""
+    return not (
+        entry.get("completeness") == "unannotated"
+        and entry.get("dimension") not in _COLLECTION_COVERAGE_DIMENSIONS
+    )
 
 
 def _record_objects(record: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -101,19 +112,19 @@ def _scope_is_supported(record: dict[str, Any], dimension: str, scope: Any) -> b
     )
 
 
-def _collection_has_content(record: dict[str, Any], dimension: str, scope: dict[str, Any]) -> bool:
-    spec = dimension_spec(dimension)
-    if spec is None:
-        return False
-    if spec.collection_like and spec.content_field is not None:
-        values = record.get(spec.content_field)
-        return isinstance(values, list) and any(
-            collection_item_in_scope(record, dimension, item, scope)
-            for item in values
-        )
-    if scope.get("kind") != "record":
-        return False
-    return any(field in record and record.get(field) not in (None, [], {}) for field in spec.fields)
+def _authoritative_payload_for_scope(
+    record: dict[str, Any],
+    dimension: str,
+    scope: dict[str, Any],
+) -> Any:
+    target: str | dict[str, Any] | None
+    if scope.get("kind") == "node":
+        target = scope.get("node")
+    elif scope.get("kind") == "region":
+        target = scope
+    else:
+        target = None
+    return authoritative_payload(record, dimension, target)
 
 
 def _unannotated_entry(
@@ -136,8 +147,6 @@ def _unannotated_entry(
 def canonicalize_coverage_entry(
     record: dict[str, Any],
     source: Any,
-    *,
-    infer_missing_evidence: bool,
 ) -> tuple[dict[str, Any] | None, bool]:
     if not isinstance(source, dict):
         return None, True
@@ -203,13 +212,12 @@ def canonicalize_coverage_entry(
             evidence = "unannotated"
             review_required = True
     elif evidence == "present":
-        if not _collection_has_content(record, dimension, entry["scope"]):
+        payload = _authoritative_payload_for_scope(record, dimension, entry["scope"])
+        if not payload.has_resolved_content or (completeness == "complete" and not payload.fully_resolved):
             completeness = "unannotated"
             omission = "intentional"
             evidence = "unannotated"
             review_required = True
-    elif not invalid_evidence and infer_missing_evidence and _collection_has_content(record, dimension, entry["scope"]):
-        evidence = "present"
     else:
         completeness = "unannotated"
         omission = "intentional"
@@ -240,8 +248,14 @@ def normalize_reference_collections(record: dict[str, Any]) -> bool:
         normalized: list[Any] = []
         unresolved: list[Any] = []
         for item in values:
-            if not isinstance(item, dict) or spec.target_lemma_field not in item:
+            if not isinstance(item, dict):
                 unresolved.append(item)
+                continue
+            if spec.target_lemma_field not in item:
+                if spec.target_lemma_optional:
+                    normalized.append(copy.deepcopy(item))
+                else:
+                    unresolved.append(item)
                 continue
             mapped = normalize_collection_item(record, dimension, item)
             if mapped is None:
@@ -262,7 +276,7 @@ def quarantine_uncovered_collection_content(
     review_required = False
     fields: dict[str, list[str]] = {}
     for dimension, spec in DIMENSION_REGISTRY.items():
-        if spec.content_field is not None:
+        if dimension in {"dependencies", "semantic_roles", "lexical_valency"} and spec.content_field is not None:
             fields.setdefault(spec.content_field, []).append(dimension)
     for field, field_dimensions in fields.items():
         if not any(entry.get("dimension") in field_dimensions for entry in dimensions):
@@ -294,6 +308,89 @@ def quarantine_uncovered_collection_content(
             preserve_legacy(record, f"{field}_unscoped", uncovered)
             record[field] = covered
             review_required = True
+    construction_items = authoritative_payload_items(record, "construction_relations")
+    if construction_items:
+        construction_entries = [
+            entry for entry in dimensions
+            if entry.get("dimension") == "construction_relations"
+        ]
+        covered_paths: set[tuple[str | int, ...]] = set()
+        uncovered_by_field: dict[str, list[Any]] = {}
+        for item in construction_items:
+            covered = any(
+                entry.get("scope", {}).get("kind") == "record"
+                and entry.get("omission") == "none"
+                and entry.get("completeness") not in _EXCLUDED_COMPLETENESS
+                and entry.get("evidence") == "present"
+                and item.status == "resolved"
+                for entry in construction_entries
+                if isinstance(entry.get("scope"), dict)
+            )
+            if covered:
+                covered_paths.add(item.path)
+            else:
+                uncovered_by_field.setdefault(item.field, []).append(item.value)
+                review_required = True
+
+        for field, values in uncovered_by_field.items():
+            if field == "construction_tags" and len(values) == 1:
+                original = values[0]
+            elif field in {"construction_signature", "construction_type"} and len(values) == 1:
+                original = values[0]
+            else:
+                original = values
+            preserve_legacy(record, f"{field}_unscoped", original)
+
+        top_level_fields = {
+            item.field for item in construction_items
+            if item.field != "typed_relation"
+        }
+        for field in top_level_fields:
+            values = [item for item in construction_items if item.field == field]
+            if not values:
+                continue
+            current = record.get(field)
+            if field == "construction_tags":
+                if any(item.path in covered_paths for item in values):
+                    record[field] = values[0].value
+                else:
+                    record[field] = []
+            elif isinstance(current, list):
+                record[field] = [
+                    item.value for item in values
+                    if item.path in covered_paths
+                ]
+            elif any(item.path in covered_paths for item in values):
+                record[field] = next(item.value for item in values if item.path in covered_paths)
+            else:
+                record.pop(field, None)
+
+        relation_groups: dict[tuple[str | int, ...], list[Any]] = {}
+        for item in construction_items:
+            if item.field != "typed_relation":
+                continue
+            relation_groups.setdefault(item.path[:-2], []).append(item)
+        for group_path, values in relation_groups.items():
+            parent: Any = record
+            try:
+                for key in group_path:
+                    parent = parent[key]
+            except (IndexError, KeyError, TypeError):
+                continue
+            if not isinstance(parent, dict):
+                continue
+            relations = parent.get("relations")
+            if isinstance(relations, list):
+                parent["relations"] = [
+                    relation for index, relation in enumerate(relations)
+                    if not any(
+                        item.path == group_path + ("relations", index)
+                        and item.path not in covered_paths
+                        for item in values
+                    )
+                ]
+            elif any(item.path not in covered_paths for item in values):
+                parent.pop("relations", None)
     return review_required
 
 
