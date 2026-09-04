@@ -190,6 +190,17 @@ not overwritten. Fixture-specific repairs require a strict manifest of exact
 record ids/source versions (and optional hashes), reject reviewed/approved
 records, and are repeat-safe.
 
+Migration and fixture repair do not infer scoped evidence from global
+collection presence. Record-scoped dependency and semantic-role collections
+cannot establish node or region ownership; lexical-valency node coverage is
+supported only by deterministic lexical-head ownership, never by selected
+complement references. Unsupported ownership remains unannotated and
+review-required, with legacy evidence retained. A transformed record must
+pass canonical validation before a file transform is written; otherwise the
+transform fails for manual review. Uncertainty is preferred to invented
+`present` or confirmed-empty metadata: missing, empty, or capability-only
+collections do not establish confirmed emptiness.
+
 ## Open questions
 
 Construction-level linguistic adjudication remains intentionally open:

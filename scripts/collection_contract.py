@@ -92,6 +92,54 @@ def collection_target_ids(record: dict[str, Any], dimension: str, item: Any) -> 
     )
 
 
+def collection_item_in_scope(
+    record: dict[str, Any],
+    dimension: str,
+    item: Any,
+    scope: Any,
+) -> bool:
+    """Return whether a collection item has a deterministic owner in scope."""
+    if not isinstance(scope, dict):
+        return False
+    scope_kind = scope.get("kind")
+    if scope_kind == "record":
+        return True
+    targets = collection_target_ids(record, dimension, item)
+    if scope_kind == "node":
+        return isinstance(scope.get("node"), str) and scope["node"] in targets
+    if scope_kind != "region":
+        return False
+    start, end = scope.get("start"), scope.get("end")
+    if type(start) is not int or type(end) is not int:
+        return False
+    words = record.get("words", [])
+    word_spans = {
+        word.get("id"): (index, index + 1)
+        for index, word in enumerate(words)
+        if isinstance(word, dict) and isinstance(word.get("id"), str)
+    } if isinstance(words, list) else {}
+    objects: dict[str, dict[str, Any]] = {}
+    for field in ("constituents", "clauses"):
+        values = record.get(field, [])
+        if not isinstance(values, list):
+            continue
+        objects.update({
+            value["id"]: value
+            for value in values
+            if isinstance(value, dict) and isinstance(value.get("id"), str)
+        })
+    for target in targets:
+        target_span = word_spans.get(target)
+        if target_span is None:
+            value = objects.get(target)
+            span = value.get("span") if isinstance(value, dict) else None
+            if isinstance(span, dict) and type(span.get("start")) is int and type(span.get("end")) is int:
+                target_span = (span["start"], span["end"])
+        if target_span is not None and start <= target_span[0] and target_span[1] <= end:
+            return True
+    return False
+
+
 def normalize_collection_item(record: dict[str, Any], dimension: str, item: Any) -> dict[str, Any] | None:
     if not isinstance(item, dict):
         return None

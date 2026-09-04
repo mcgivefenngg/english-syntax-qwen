@@ -9,9 +9,27 @@ version is rejected instead of being guessed.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 from pathlib import Path
 from typing import Any
+
+try:
+    from migration_safety import (
+        canonicalize_coverage_entry,
+        normalize_reference_collections,
+        quarantine_uncovered_collection_content,
+        sort_coverage_entries,
+        validate_canonical_record,
+    )
+except ImportError:
+    from scripts.migration_safety import (
+        canonicalize_coverage_entry,
+        normalize_reference_collections,
+        quarantine_uncovered_collection_content,
+        sort_coverage_entries,
+        validate_canonical_record,
+    )
 
 
 SOURCE_SCHEMA_VERSION = "0.2"
@@ -118,39 +136,96 @@ def _migrate_constituent(constituent: dict[str, Any], clauses: dict[str, dict[st
     return review_required
 
 
-def _migrate_scope(record: dict[str, Any]) -> None:
+def _migrate_scope(record: dict[str, Any]) -> bool:
     old_scope = record.get("annotation_scope")
+    review_required = False
+    record.setdefault("dependencies", [])
     if isinstance(old_scope, dict) and isinstance(old_scope.get("dimensions"), list) and old_scope["dimensions"]:
-        collection_fields = {
-            "dependencies": "dependencies",
-            "semantic_roles": "semantic_roles",
-            "lexical_valency": "lexical_valency",
+        dimensions = []
+        preserve_scope = False
+        for source in old_scope["dimensions"]:
+            entry, entry_review = canonicalize_coverage_entry(
+                record,
+                source,
+                infer_missing_evidence=True,
+            )
+            review_required = review_required or entry_review
+            preserve_scope = preserve_scope or entry_review or entry != source
+            if entry is not None:
+                dimensions.append(entry)
+        existing = {entry.get("dimension") for entry in dimensions}
+        for dimension, field in (
+            ("dependencies", "dependencies"),
+            ("semantic_roles", "semantic_roles"),
+            ("lexical_valency", "lexical_valency"),
+        ):
+            if dimension in existing:
+                continue
+            if dimension == "dependencies" or field in record or dimension in record.get("capability_tags", []):
+                dimensions.append({
+                    "dimension": dimension,
+                    "scope": {"kind": "record"},
+                    "completeness": "unannotated",
+                    "omission": "intentional",
+                    "evidence": "unannotated",
+                })
+        if preserve_scope and "legacy_annotation_scope" not in record:
+            legacy_scope = copy.deepcopy(old_scope)
+            if isinstance(legacy_scope.get("dimensions"), list) and all(isinstance(entry, dict) for entry in legacy_scope["dimensions"]):
+                legacy_scope["dimensions"] = sort_coverage_entries(legacy_scope["dimensions"])
+            record["legacy_annotation_scope"] = legacy_scope
+        dimensions = sort_coverage_entries(dimensions)
+        review_required = quarantine_uncovered_collection_content(record, dimensions) or review_required
+        record["annotation_scope"] = {
+            "coverage": old_scope.get("coverage", "task_focused_partial"),
+            "dimensions": dimensions,
+            "annotated_dimensions": [entry["dimension"] for entry in dimensions if entry["omission"] == "none"],
+            "intentionally_omitted": [entry["dimension"] for entry in dimensions if entry["omission"] != "none"],
         }
-        for entry in old_scope["dimensions"]:
-            if isinstance(entry, dict) and entry.get("omission") in {"intentional", "not_applicable"}:
-                entry["evidence"] = "unannotated"
-            elif isinstance(entry, dict) and "evidence" not in entry:
-                field = collection_fields.get(entry.get("dimension"))
-                values = record.get(field) if field is not None else None
-                if field is not None and (not isinstance(values, list) or not values):
-                    entry["omission"] = "intentional"
-                    entry["evidence"] = "unannotated"
-                else:
-                    entry["evidence"] = "present"
-        return
+        return review_required
     if isinstance(old_scope, dict) and old_scope:
-        record["legacy_annotation_scope"] = old_scope
-    dimensions = []
+        if "legacy_annotation_scope" not in record:
+            record["legacy_annotation_scope"] = copy.deepcopy(old_scope)
+    dimensions: list[dict[str, Any]] = []
+    declared = set(old_scope.get("annotated_dimensions", [])) if isinstance(old_scope, dict) and isinstance(old_scope.get("annotated_dimensions"), list) else set()
     for dimension, field in (("tokens", "words"), ("lexical_category", "words"), ("phrase_constituency", "constituents"), ("clause_ontology", "clauses"), ("syntactic_function", "constituents")):
-        if isinstance(record.get(field), list) and record[field]:
-            dimensions.append({"dimension": dimension, "scope": {"kind": "record"}, "completeness": "partial", "omission": "none", "evidence": "present"})
-    dependencies = record.get("dependencies")
-    dependencies_present = isinstance(dependencies, list) and bool(dependencies)
-    dimensions.append({"dimension": "dependencies", "scope": {"kind": "record"}, "completeness": "partial", "omission": "none" if dependencies_present else "intentional", "evidence": "present" if dependencies_present else "unannotated"})
-    if "semantic_roles" in record.get("capability_tags", []) and not any(item.get("dimension") == "semantic_roles" for item in dimensions):
-        record.setdefault("semantic_roles", [])
-        dimensions.append({"dimension": "semantic_roles", "scope": {"kind": "record"}, "completeness": "partial", "omission": "intentional", "evidence": "unannotated"})
-    record["annotation_scope"] = {"coverage": "task_focused_partial", "dimensions": dimensions}
+        if isinstance(record.get(field), list) and record[field] or dimension in declared:
+            source = {"dimension": dimension, "scope": {"kind": "record"}, "completeness": "partial", "omission": "none"}
+            entry, entry_review = canonicalize_coverage_entry(record, source, infer_missing_evidence=True)
+            review_required = review_required or entry_review
+            if entry is not None:
+                dimensions.append(entry)
+    for dimension, field in (
+        ("dependencies", "dependencies"),
+        ("semantic_roles", "semantic_roles"),
+        ("lexical_valency", "lexical_valency"),
+    ):
+        if dimension in declared:
+            source = {"dimension": dimension, "scope": {"kind": "record"}, "completeness": "partial", "omission": "none"}
+            entry, entry_review = canonicalize_coverage_entry(record, source, infer_missing_evidence=True)
+            review_required = review_required or entry_review
+            if entry is not None:
+                dimensions.append(entry)
+            continue
+        if dimension == "dependencies" or field in record or dimension in record.get("capability_tags", []):
+            if dimension != "dependencies":
+                record.setdefault(field, [])
+            dimensions.append({
+                "dimension": dimension,
+                "scope": {"kind": "record"},
+                "completeness": "unannotated",
+                "omission": "intentional",
+                "evidence": "unannotated",
+            })
+    dimensions = sort_coverage_entries(dimensions)
+    review_required = quarantine_uncovered_collection_content(record, dimensions) or review_required
+    record["annotation_scope"] = {
+        "coverage": "task_focused_partial",
+        "dimensions": dimensions,
+        "annotated_dimensions": [entry["dimension"] for entry in dimensions if entry["omission"] == "none"],
+        "intentionally_omitted": [entry["dimension"] for entry in dimensions if entry["omission"] != "none"],
+    }
+    return review_required
 
 
 def _ensure_typed_analysis(record: dict[str, Any]) -> None:
@@ -244,7 +319,8 @@ def migrate(record: dict[str, Any]) -> dict[str, Any]:
             if constituent.get("function") == "determinative":
                 constituent["function"] = "determiner"
     review_required = _migrate_alternatives(record) or review_required
-    _migrate_scope(record)
+    review_required = normalize_reference_collections(record) or review_required
+    review_required = _migrate_scope(record) or review_required
     _ensure_typed_analysis(record)
     words = record.get("words", [])
     for clause in record.get("clauses", []):
@@ -275,6 +351,7 @@ def migrate_file(path: Path) -> list[str]:
                 record = json.loads(line)
                 source_version = record.get("schema_version") if isinstance(record, dict) else None
                 migrate(record)
+                validate_canonical_record(record, f"{path}:{line_number}")
                 changed = changed or source_version != TARGET_SCHEMA_VERSION
             except (json.JSONDecodeError, ValueError) as error:
                 raise ValueError(f"{path}:{line_number}: {error}") from error

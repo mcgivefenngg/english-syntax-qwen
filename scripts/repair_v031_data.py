@@ -9,9 +9,27 @@ to unresolved candidates and the existing benchmark count/content is retained.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 from pathlib import Path
 from typing import Any
+
+try:
+    from migration_safety import (
+        canonicalize_coverage_entry,
+        normalize_reference_collections,
+        quarantine_uncovered_collection_content,
+        sort_coverage_entries,
+        validate_canonical_record,
+    )
+except ImportError:
+    from scripts.migration_safety import (
+        canonicalize_coverage_entry,
+        normalize_reference_collections,
+        quarantine_uncovered_collection_content,
+        sort_coverage_entries,
+        validate_canonical_record,
+    )
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -121,34 +139,69 @@ def repair_record(record: dict[str, Any]) -> dict[str, Any]:
         wrapper["realization"] = {"clause_ref": wrapper["clause_ref"], "relation": relation}
 
     old_scope = record.get("annotation_scope", {})
+    review_required = normalize_reference_collections(record)
+    preserve_scope = False
     if isinstance(old_scope, dict) and isinstance(old_scope.get("dimensions"), list) and old_scope["dimensions"]:
-        dimensions = [dict(entry) for entry in old_scope["dimensions"] if isinstance(entry, dict)]
+        dimensions = []
+        for source in old_scope["dimensions"]:
+            entry, entry_review = canonicalize_coverage_entry(
+                record,
+                source,
+                infer_missing_evidence=True,
+            )
+            review_required = review_required or entry_review
+            preserve_scope = preserve_scope or entry_review or entry != source
+            if entry is not None:
+                dimensions.append(entry)
     else:
         old_dimensions = old_scope.get("annotated_dimensions", []) if isinstance(old_scope, dict) else []
         dimensions = []
         for dimension in old_dimensions:
-            if dimension == "dependencies" and record.get("dependencies") == []:
-                dimensions.append({"dimension": dimension, "scope": {"kind": "record"}, "completeness": "partial", "omission": "intentional", "evidence": "unannotated"})
-            else:
-                dimensions.append({"dimension": dimension, "scope": {"kind": "record"}, "completeness": "partial", "omission": "none", "evidence": "present"})
-    for dimension, field in (("semantic_roles", "semantic_roles"), ("lexical_valency", "lexical_valency"), ("framework_mapping", "framework"), ("construction_relations", "construction_type")):
-        if dimension not in {entry.get("dimension") for entry in dimensions} and ((isinstance(record.get(field), list) and record[field]) or (dimension == "framework_mapping" and isinstance(record.get(field), dict)) or (dimension == "construction_relations" and record.get(field))):
-            dimensions.append({"dimension": dimension, "scope": {"kind": "record"}, "completeness": "partial", "omission": "none", "evidence": "present"})
-    if "semantic_roles" in record.get("capability_tags", []) and "semantic_roles" not in {entry.get("dimension") for entry in dimensions}:
-        record.setdefault("semantic_roles", [])
-        dimensions.append({"dimension": "semantic_roles", "scope": {"kind": "record"}, "completeness": "partial", "omission": "intentional", "evidence": "unannotated"})
-    if "lexical_valency" in record.get("capability_tags", []) and "lexical_valency" not in {entry.get("dimension") for entry in dimensions}:
-        record.setdefault("lexical_valency", [])
-        dimensions.append({"dimension": "lexical_valency", "scope": {"kind": "record"}, "completeness": "partial", "omission": "intentional", "evidence": "unannotated"})
-    if not any(entry.get("dimension") == "dependencies" for entry in dimensions):
-        dimensions.append({"dimension": "dependencies", "scope": {"kind": "record"}, "completeness": "partial", "omission": "intentional", "evidence": "unannotated" if record.get("dependencies") == [] else "present"})
+            source = {"dimension": dimension, "scope": {"kind": "record"}, "completeness": "partial", "omission": "none"}
+            entry, entry_review = canonicalize_coverage_entry(record, source, infer_missing_evidence=True)
+            review_required = review_required or entry_review
+            preserve_scope = preserve_scope or entry_review or entry != source
+            if entry is not None:
+                dimensions.append(entry)
+    if preserve_scope and "legacy_annotation_scope" not in record:
+        legacy_scope = copy.deepcopy(old_scope)
+        if isinstance(legacy_scope, dict) and isinstance(legacy_scope.get("dimensions"), list) and all(isinstance(entry, dict) for entry in legacy_scope["dimensions"]):
+            legacy_scope["dimensions"] = sort_coverage_entries(legacy_scope["dimensions"])
+        if isinstance(legacy_scope, dict):
+            record["legacy_annotation_scope"] = legacy_scope
+    existing = {entry.get("dimension") for entry in dimensions}
+    record.setdefault("dependencies", [])
+    for dimension, field in (
+        ("semantic_roles", "semantic_roles"),
+        ("lexical_valency", "lexical_valency"),
+        ("dependencies", "dependencies"),
+    ):
+        if dimension in existing:
+            continue
+        if dimension == "dependencies" or field in record or dimension in record.get("capability_tags", []):
+            if dimension != "dependencies":
+                record.setdefault(field, [])
+            dimensions.append({
+                "dimension": dimension,
+                "scope": {"kind": "record"},
+                "completeness": "unannotated",
+                "omission": "intentional",
+                "evidence": "unannotated",
+            })
+    dimensions = sort_coverage_entries(dimensions)
+    review_required = quarantine_uncovered_collection_content(record, dimensions) or review_required
     record["annotation_scope"] = {
         "coverage": "task_focused_partial",
         "dimensions": dimensions,
         "annotated_dimensions": [entry["dimension"] for entry in dimensions if entry["omission"] == "none"],
         "intentionally_omitted": [entry["dimension"] for entry in dimensions if entry["omission"] != "none"],
     }
-    metadata = record.setdefault("review_metadata", {})
+    metadata = record.get("review_metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+        record["review_metadata"] = metadata
+    metadata.setdefault("review_status", "schema_migrated")
+    metadata.setdefault("reviewer_type", "automated_structural")
     analysis = record.get("canonical_analysis", {})
     label = str(analysis.get("label", "")).casefold()
     claims = " ".join(str(claim) for claim in analysis.get("claims", []) if isinstance(claim, str)).casefold()
@@ -166,6 +219,12 @@ def repair_record(record: dict[str, Any]) -> dict[str, Any]:
     migration_metadata = record.setdefault("migration_metadata", {})
     if isinstance(migration_metadata, dict):
         migration_metadata["fixture_repair_version"] = REPAIR_VERSION
+    if review_required:
+        sensitive = True
+        if metadata.get("review_status") not in {"linguistically_reviewed", "approved_for_training", "canonical_gold"}:
+            metadata["review_status"] = "review_required"
+        record["migration_review_required"] = True
+        record["migration_note"] = "Legacy coverage or collection ownership lacked a unique deterministic V0.4 mapping; human review is required."
     if sensitive or any(isinstance(word, dict) and isinstance(word.get("lexical_analysis"), dict) for word in record.get("words", [])):
         metadata["review_status"] = "review_required"
     record["schema_version"] = TARGET_SCHEMA_VERSION
@@ -229,6 +288,8 @@ def repair_file(path: Path, manifest_path: Path | None = None) -> None:
     if unknown:
         raise ValueError(f"manifest IDs missing from input: {sorted(unknown)}")
     if changed:
+        for row_number, row in enumerate(rows, 1):
+            validate_canonical_record(row, f"{path}:{row_number}")
         with path.open("w", encoding="utf-8") as handle:
             for row in rows:
                 handle.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
