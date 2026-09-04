@@ -8,6 +8,7 @@ from typing import Any
 from unittest.mock import patch
 
 from scripts.coverage_resolution import (
+    CoverageResolutionError,
     CoverageState,
     ScoringEligibility,
     resolve_coverage,
@@ -89,6 +90,65 @@ class CoverageResolutionTests(unittest.TestCase):
         )
         self.assertIs(resolve_coverage(record, DIMENSION, "w0"), CoverageState.COMPLETE)
         self.assertIs(resolve_coverage(record, DIMENSION, "w2"), CoverageState.UNANNOTATED)
+
+    def test_word_target_uses_canonical_token_index_for_region_membership(self) -> None:
+        record = with_dimensions(
+            declaration({"kind": "region", "start": 0, "end": 1}, "complete"),
+        )
+        self.assertIs(resolve_coverage(record, DIMENSION, "w0"), CoverageState.COMPLETE)
+
+    def test_conflicting_extra_word_span_cannot_change_region_membership(self) -> None:
+        record = with_dimensions(
+            declaration({"kind": "region", "start": 0, "end": 1}, "complete"),
+            declaration({"kind": "region", "start": 3, "end": 5}, "omitted", "intentional", "unannotated"),
+        )
+        record["words"][0]["span"] = {"start": 3, "end": 5}
+        self.assertIs(resolve_coverage(record, DIMENSION, "w0"), CoverageState.COMPLETE)
+
+    def test_unknown_node_target_does_not_inherit_record_complete(self) -> None:
+        record = with_dimensions(declaration({"kind": "record"}, "complete"))
+        with self.assertRaises(CoverageResolutionError):
+            resolve_coverage(record, DIMENSION, "ghost")
+
+    def test_unknown_node_target_is_not_scoreable(self) -> None:
+        record = with_dimensions(declaration({"kind": "record"}, "complete"))
+        decision = resolve_scoring_eligibility(record, DIMENSION, "ghost")
+        self.assertFalse(decision.scoreable)
+        self.assertIsNone(decision.coverage_state)
+
+    def test_unknown_target_under_record_confirmed_empty_is_not_scoreable(self) -> None:
+        record = with_dimensions(
+            declaration({"kind": "record"}, "complete", evidence="empty", dimension="dependencies"),
+        )
+        decision = resolve_scoring_eligibility(record, "dependencies", "ghost")
+        self.assertFalse(decision.scoreable)
+        self.assertIsNone(decision.coverage_state)
+
+    def test_malformed_target_reference_fails_closed(self) -> None:
+        record = with_dimensions(declaration({"kind": "record"}, "complete"))
+        with self.assertRaises(CoverageResolutionError):
+            resolve_coverage(record, DIMENSION, {"node": "subj"})
+        decision = resolve_scoring_eligibility(record, DIMENSION, {"node": "subj"})
+        self.assertFalse(decision.scoreable)
+        self.assertIsNone(decision.coverage_state)
+
+    def test_unmappable_known_node_fails_closed(self) -> None:
+        record = with_dimensions(declaration({"kind": "record"}, "complete"))
+        record["constituents"][0]["span"] = {"start": 0}
+        with self.assertRaises(CoverageResolutionError):
+            resolve_coverage(record, DIMENSION, "subj")
+        decision = resolve_scoring_eligibility(record, DIMENSION, "subj")
+        self.assertFalse(decision.scoreable)
+        self.assertIsNone(decision.coverage_state)
+
+    def test_known_node_inherits_applicable_record_coverage(self) -> None:
+        record = with_dimensions(declaration({"kind": "record"}, "complete"))
+        self.assertIs(resolve_coverage(record, DIMENSION, "subj"), CoverageState.COMPLETE)
+
+    def test_explicit_record_target_resolves_record_coverage(self) -> None:
+        record = with_dimensions(declaration({"kind": "record"}, "complete"))
+        record_target: str | None = None
+        self.assertIs(resolve_coverage(record, DIMENSION, record_target), CoverageState.COMPLETE)
 
     def test_identical_exact_duplicate_is_rejected(self) -> None:
         entry = declaration({"kind": "node", "node": "subj"}, "complete")

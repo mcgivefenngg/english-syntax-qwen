@@ -29,7 +29,7 @@ class ScoringEligibility:
 
 
 class CoverageResolutionError(ValueError):
-    """Raised when invalid declarations cannot produce one coverage state."""
+    """Raised when invalid declarations or targets cannot produce one coverage state."""
 
 
 @dataclass(frozen=True)
@@ -63,17 +63,28 @@ def _record_objects(record: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return objects
 
 
+def _target_exists(record: dict[str, Any], target: str) -> bool:
+    if not isinstance(target, str) or not target:
+        return False
+    return target in _record_objects(record)
+
+
 def _target_span(record: dict[str, Any], target: str) -> tuple[int, int] | None:
-    target_object = _record_objects(record).get(target, {})
-    span = target_object.get("span")
-    if isinstance(span, dict) and type(span.get("start")) is int and type(span.get("end")) is int:
-        return span["start"], span["end"]
     words = record.get("words", [])
     if isinstance(words, list):
         for index, word in enumerate(words):
             if isinstance(word, dict) and word.get("id") == target:
                 return index, index + 1
-    return None
+    target_object = _record_objects(record).get(target)
+    if not isinstance(target_object, dict):
+        return None
+    span = target_object.get("span")
+    if not isinstance(span, dict) or type(span.get("start")) is not int or type(span.get("end")) is not int:
+        return None
+    token_count = len(words) if isinstance(words, list) else 0
+    if span["start"] < 0 or span["end"] <= span["start"] or span["end"] > token_count:
+        return None
+    return span["start"], span["end"]
 
 
 def _scope_issue(
@@ -393,6 +404,8 @@ def resolve_coverage(
         and isinstance(entry.get("scope"), dict)
     ]
     if target is not None:
+        if not _target_exists(record, target):
+            raise CoverageResolutionError("coverage target must reference a known word, constituent, or clause")
         node_entries = [
             entry for entry in entries
             if entry["scope"].get("kind") == "node" and entry["scope"].get("node") == target
@@ -401,27 +414,28 @@ def resolve_coverage(
             return _collapse_states(node_entries, partial_is_covered=True)
 
         target_span = _target_span(record, target)
-        if target_span is not None:
-            target_start, target_end = target_span
-            regions = [
-                entry for entry in entries
-                if entry["scope"].get("kind") == "region"
-                and type(entry["scope"].get("start")) is int
-                and type(entry["scope"].get("end")) is int
-                and entry["scope"]["start"] <= target_start
-                and target_end <= entry["scope"]["end"]
-            ]
-            most_specific = [
-                entry for entry in regions
-                if not any(
-                    other is not entry
-                    and coverage_scope_key(other["scope"]) != coverage_scope_key(entry["scope"])
-                    and _region_contains(entry["scope"], other["scope"])
-                    for other in regions
-                )
-            ]
-            if most_specific:
-                return _collapse_states(most_specific, partial_is_covered=True)
+        if target_span is None:
+            raise CoverageResolutionError("coverage target span cannot be resolved")
+        target_start, target_end = target_span
+        regions = [
+            entry for entry in entries
+            if entry["scope"].get("kind") == "region"
+            and type(entry["scope"].get("start")) is int
+            and type(entry["scope"].get("end")) is int
+            and entry["scope"]["start"] <= target_start
+            and target_end <= entry["scope"]["end"]
+        ]
+        most_specific = [
+            entry for entry in regions
+            if not any(
+                other is not entry
+                and coverage_scope_key(other["scope"]) != coverage_scope_key(entry["scope"])
+                and _region_contains(entry["scope"], other["scope"])
+                for other in regions
+            )
+        ]
+        if most_specific:
+            return _collapse_states(most_specific, partial_is_covered=True)
 
     record_entries = [entry for entry in entries if entry["scope"].get("kind") == "record"]
     if record_entries:
