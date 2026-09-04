@@ -79,7 +79,10 @@ class DataPipelineTests(unittest.TestCase):
         migrate(legacy)
         self.assertEqual(legacy["schema_version"], "0.4")
         self.assertEqual(legacy["clauses"][0]["clause_construction"], "unresolved")
-        self.assertEqual(validate_record(legacy, "migrated"), [])
+        self.assertTrue(any(
+            "clause_ontology" in error and "resolved authoritative" in error
+            for error in validate_record(legacy, "migrated")
+        ))
         migrated_once = copy.deepcopy(legacy)
         migrate(legacy)
         self.assertEqual(legacy, migrated_once)
@@ -273,7 +276,10 @@ class DataPipelineTests(unittest.TestCase):
         benchmark_ids = {record["id"] for _, record in read_jsonl(BENCHMARK)}
         gold_ids = {record["id"] for _, record in read_jsonl(GOLD)}
         self.assertTrue(benchmark_ids.isdisjoint(gold_ids))
-        self.assertEqual(validate_files([GOLD], BENCHMARK), [])
+        errors = validate_files([GOLD], BENCHMARK)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("construction_relations", errors[0])
+        self.assertIn("resolved authoritative payload", errors[0])
         self.assertTrue(validate_files([ROOT / "data" / "does-not-exist.jsonl"], BENCHMARK))
 
     def test_benchmark_records_use_full_validation_and_review_gate(self) -> None:
@@ -310,7 +316,10 @@ class DataPipelineTests(unittest.TestCase):
         train_ids = {record["id"] for _, record in read_jsonl(ROOT / "data" / "splits" / "train_fixture.jsonl")}
         validation_ids = {record["id"] for _, record in read_jsonl(ROOT / "data" / "splits" / "validation_fixture.jsonl")}
         self.assertTrue(train_ids.isdisjoint(validation_ids))
-        self.assertEqual(validate_files([ROOT / "data" / "splits"], BENCHMARK), [])
+        errors = validate_files([ROOT / "data" / "splits"], BENCHMARK)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("construction_relations", errors[0])
+        self.assertIn("resolved authoritative payload", errors[0])
 
 
 if __name__ == "__main__":

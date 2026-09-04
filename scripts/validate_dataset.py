@@ -738,10 +738,6 @@ def _validate_coverage(record: dict[str, Any], location: str, errors: list[str])
         by_dimension.setdefault(dimension, []).append(entry)
     for dimension, entries_for_dimension in by_dimension.items():
         annotated = [entry for entry in entries_for_dimension if entry.get("omission") == "none"]
-        spec = dimension_spec(dimension)
-        fields = spec.fields if spec is not None else frozenset()
-        if annotated and spec is not None and spec.requires_payload_field and fields and not any(field in record for field in fields):
-            _error(errors, f"{location}.annotation_scope", f"annotated dimension {dimension!r} requires one of fields {sorted(fields)!r}")
     if coverage == "complete_constituency":
         required_dimensions = {"tokens", "lexical_category", "phrase_constituency", "clause_ontology", "syntactic_function"}
         declared = {dimension for dimension, values in by_dimension.items() if any(value.get("omission") == "none" for value in values)}

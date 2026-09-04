@@ -220,7 +220,10 @@ class CoverageResolutionTests(unittest.TestCase):
             declaration({"kind": "node", "node": "subj"}, "complete"),
             declaration({"kind": "node", "node": "obj"}, "omitted", "intentional", "unannotated"),
         )
-        self.assertEqual(validate_record(record, "subject-object"), [])
+        self.assertTrue(any(
+            "np_internal_constituency" in error and "unannotated/omitted" in error
+            for error in validate_record(record, "subject-object")
+        ))
         self.assertIs(resolve_coverage(record, DIMENSION, "subj"), CoverageState.COMPLETE)
         self.assertIs(resolve_coverage(record, DIMENSION, "obj"), CoverageState.OMITTED)
 

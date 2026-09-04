@@ -1,9 +1,4 @@
-"""Canonical V0.4 annotation-dimension capabilities.
-
-This module describes coverage capabilities and projection ownership only. It
-does not encode the linguistic ontology or the shape of any authoritative
-payload.
-"""
+"""Canonical V0.4 annotation-dimension and payload ownership registry."""
 
 from __future__ import annotations
 
@@ -23,6 +18,7 @@ class PayloadSpec:
 
     field: str
     properties: frozenset[str] = frozenset()
+    relation_types: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -69,8 +65,12 @@ class DimensionSpec:
         return scope_kind in self.confirmed_empty_scope_kinds
 
 
-def _payload(field: str, *properties: str) -> PayloadSpec:
-    return PayloadSpec(field, frozenset(properties))
+def _payload(
+    field: str,
+    *properties: str,
+    relation_types: set[str] | frozenset[str] = frozenset(),
+) -> PayloadSpec:
+    return PayloadSpec(field, frozenset(properties), frozenset(relation_types))
 
 
 def _spec(
@@ -187,7 +187,7 @@ _DIMENSIONS = {
             _payload("constituents", "id", "node_kind", "span", "function", "clause_ref", "realization", "head", "parent"),
             _payload("lexical_valency", "predicate", "frame", "selected_complements"),
             _payload("typed_arguments", "target", "source", "head", "dependent", "relation", "span", "clause_ref", "constituent_ref", "word_ref", "predicate", "value", "label"),
-            _payload("typed_relation", "target", "source", "head", "dependent", "relation", "span", "clause_ref", "constituent_ref", "word_ref", "predicate", "value", "label"),
+            _payload("typed_relation", "target", "source", "head", "dependent", "relation", "span", "clause_ref", "constituent_ref", "word_ref", "predicate", "value", "label", relation_types={"selection"}),
             _payload("complements", "value"),
             _payload("adjuncts", "value"),
         ), target_fields=("id",),
@@ -200,7 +200,7 @@ _DIMENSIONS = {
             _payload("typed_analysis", "kind", "framework", "arguments", "entities", "relations"),
             _payload("typed_arguments", "id", "kind", "type", "target", "source", "head", "dependent", "relation", "span", "clause_ref", "constituent_ref", "word_ref", "predicate", "value", "label"),
             _payload("typed_entity", "id", "kind"),
-            _payload("typed_relation", "id", "kind", "type", "arity", "source", "target", "namespace", "framework", "head", "dependent", "relation"),
+            _payload("typed_relation", "id", "kind", "type", "arity", "source", "target", "namespace", "framework", "head", "dependent", "relation", relation_types={"dependency"}),
         ), content_field="dependencies", target_fields=("head", "dependent"),
     ),
     "semantic_roles": _spec(
@@ -237,7 +237,10 @@ _DIMENSIONS = {
             _payload("typed_analysis", "kind", "framework", "arguments", "entities", "relations"),
             _payload("typed_arguments", "id", "kind", "type", "target", "source", "head", "dependent", "relation", "span", "clause_ref", "constituent_ref", "word_ref", "predicate", "value", "label"),
             _payload("typed_entity", "id", "kind"),
-            _payload("typed_relation", "id", "kind", "type", "arity", "source", "target", "namespace", "framework", "head", "dependent", "relation"),
+            _payload("typed_relation", "id", "kind", "type", "arity", "source", "target", "namespace", "framework", "head", "dependent", "relation", relation_types={
+                "attachment", "construction", "control", "coreference", "cross_node", "framework_relation",
+                "predication", "raising", "realization_link",
+            }),
         ),
     ),
 }

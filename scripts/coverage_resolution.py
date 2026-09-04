@@ -7,14 +7,19 @@ from enum import Enum
 from typing import Any
 
 try:
-    from dimension_registry import DIMENSION_REGISTRY, dimension_spec
+    from dimension_registry import dimension_spec
 except ImportError:
-    from scripts.dimension_registry import DIMENSION_REGISTRY, dimension_spec
+    from scripts.dimension_registry import dimension_spec
 
 try:
     from collection_contract import collection_target_ids
 except ImportError:
     from scripts.collection_contract import collection_target_ids
+
+try:
+    from authoritative_payload import AuthoritativePayload, AuthoritativePayloadState, authoritative_payload, authoritative_payload_state
+except ImportError:
+    from scripts.authoritative_payload import AuthoritativePayload, AuthoritativePayloadState, authoritative_payload, authoritative_payload_state
 
 
 class CoverageState(str, Enum):
@@ -170,97 +175,6 @@ def _regions_overlap(left: dict[str, Any], right: dict[str, Any]) -> bool:
     return max(left["start"], right["start"]) < min(left["end"], right["end"])
 
 
-_COLLECTION_DIMENSIONS: dict[str, str] = {
-    name: spec.content_field
-    for name, spec in DIMENSION_REGISTRY.items()
-    if spec.content_field is not None
-}
-
-
-def _collection_targets(record: dict[str, Any], dimension: str, item: Any) -> list[str]:
-    return list(collection_target_ids(record, dimension, item))
-
-
-def _target_in_scope(record: dict[str, Any], target: str, scope: dict[str, Any]) -> bool:
-    kind = scope.get("kind")
-    if kind == "record":
-        return True
-    if kind == "node":
-        return target == scope.get("node")
-    target_span = _target_span(record, target)
-    start, end = scope.get("start"), scope.get("end")
-    return (
-        target_span is not None
-        and type(start) is int
-        and type(end) is int
-        and start <= target_span[0]
-        and target_span[1] <= end
-    )
-
-
-def _has_more_specific_scope(record: dict[str, Any], dimension: str, target: str, scope: dict[str, Any]) -> bool:
-    annotation_scope = record.get("annotation_scope")
-    dimensions = annotation_scope.get("dimensions", []) if isinstance(annotation_scope, dict) else []
-    if not isinstance(dimensions, list):
-        return False
-    for entry in dimensions:
-        if not isinstance(entry, dict) or entry.get("dimension") != dimension:
-            continue
-        other_scope = entry.get("scope")
-        if not isinstance(other_scope, dict) or other_scope.get("kind") == "record":
-            continue
-        if _target_in_scope(record, target, other_scope):
-            return True
-    return False
-
-
-def _collection_items_for_declaration(
-    record: dict[str, Any],
-    dimension: str,
-    entry: dict[str, Any],
-    values: list[Any],
-) -> list[Any]:
-    scope = entry.get("scope")
-    if not isinstance(scope, dict):
-        return []
-    selected: list[Any] = []
-    for item in values:
-        targets = _collection_targets(record, dimension, item)
-        if not targets:
-            if scope.get("kind") == "record":
-                selected.append(item)
-            continue
-        if scope.get("kind") == "record":
-            specific_states: list[CoverageState] = []
-            for target in targets:
-                if not _has_more_specific_scope(record, dimension, target, scope):
-                    continue
-                try:
-                    state = resolve_coverage(record, dimension, target)
-                except CoverageResolutionError:
-                    continue
-                specific_states.append(state)
-            if any(state in {CoverageState.COMPLETE, CoverageState.CONFIRMED_EMPTY, CoverageState.PARTIAL_COVERED} for state in specific_states):
-                continue
-        owned_targets: list[str] = []
-        for target in targets:
-            if not _target_in_scope(record, target, scope):
-                continue
-            if not _has_more_specific_scope(record, dimension, target, scope):
-                owned_targets.append(target)
-                continue
-            try:
-                state = resolve_coverage(record, dimension, target)
-            except CoverageResolutionError:
-                continue
-            expected = _entry_state(entry, partial_is_covered=True)
-            if expected is not None and state is expected:
-                owned_targets.append(target)
-        if owned_targets:
-            selected.append(item)
-    return selected
-
-
 def _collection_content_issues(
     record: dict[str, Any],
     valid_entries: list[tuple[int, dict[str, Any]]],
@@ -268,38 +182,34 @@ def _collection_content_issues(
     issues: list[CoverageIssue] = []
     for index, entry in valid_entries:
         dimension = entry.get("dimension")
-        field = _COLLECTION_DIMENSIONS.get(dimension)
-        if field is None:
+        scope = entry.get("scope")
+        if not isinstance(dimension, str) or not isinstance(scope, dict):
             continue
-        values = record.get(field)
-        values = values if isinstance(values, list) else []
-        owned_items = _collection_items_for_declaration(record, dimension, entry, values)
+        target: str | dict[str, Any] | None = None
+        if scope.get("kind") == "node":
+            target = scope.get("node")
+        elif scope.get("kind") == "region":
+            target = scope
+        payload = authoritative_payload(record, dimension, target)
         evidence = entry.get("evidence")
         omission = entry.get("omission")
         completeness = entry.get("completeness")
         scope_label = f"{dimension} {entry.get('scope')}"
         excluded = omission in {"intentional", "not_applicable"} or completeness in {"unannotated", "omitted", "out_of_scope"}
         if excluded:
-            if owned_items:
-                issues.append(CoverageIssue(index, f"{scope_label} is unannotated/omitted but has authoritative collection content"))
+            if payload.has_authoritative_content:
+                issues.append(CoverageIssue(index, f"{scope_label} is unannotated/omitted but has authoritative payload content"))
             continue
         if evidence == "present":
-            if not owned_items:
-                effective_items = [
-                    item for item in values
-                    if _collection_item_coverage_state(record, dimension, item) in {
-                        CoverageState.COMPLETE,
-                        CoverageState.CONFIRMED_EMPTY,
-                        CoverageState.PARTIAL_COVERED,
-                    }
-                ]
-                if entry.get("scope", {}).get("kind") != "record" or not effective_items:
-                    issues.append(CoverageIssue(index, f"evidence='present' requires non-empty authoritative {field} content in the covered scope"))
+            if not payload.has_resolved_content:
+                issues.append(CoverageIssue(index, f"{scope_label} evidence='present' requires resolved authoritative payload in the covered scope"))
+            elif completeness == "complete" and not payload.fully_resolved:
+                issues.append(CoverageIssue(index, f"{scope_label} complete coverage requires all applicable authoritative payload to be resolved"))
         elif evidence == "empty":
-            if owned_items:
-                issues.append(CoverageIssue(index, f"evidence='empty' requires an empty {field} collection in the covered scope"))
-        elif not owned_items:
-            issues.append(CoverageIssue(index, f"annotated empty {field} collection requires evidence='empty'"))
+            if payload.has_authoritative_content:
+                issues.append(CoverageIssue(index, f"{scope_label} evidence='empty' cannot coexist with owned authoritative payload"))
+        elif not payload.has_resolved_content:
+            issues.append(CoverageIssue(index, f"{scope_label} annotated coverage requires evidence='empty' or resolved authoritative payload"))
     return issues
 
 

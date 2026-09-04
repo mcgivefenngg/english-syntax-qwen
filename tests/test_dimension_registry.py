@@ -67,6 +67,10 @@ class DimensionRegistryTests(unittest.TestCase):
                 record = record_with(declaration(dimension, {"kind": "record"}, evidence=evidence))
                 if dimension in empty_collections:
                     record[dimension] = []
+                if dimension == "vp_complementation":
+                    record["lexical_valency"] = [{"predicate": "catalogue", "frame": "transitive", "selected_complements": []}]
+                if dimension == "construction_relations":
+                    record["construction_type"] = "transitive"
                 self.assertEqual(validate_record(record, f"registry:{dimension}"), [])
                 expected = CoverageState.CONFIRMED_EMPTY if evidence == "empty" else CoverageState.COMPLETE
                 self.assertIs(resolve_coverage(record, dimension), expected)

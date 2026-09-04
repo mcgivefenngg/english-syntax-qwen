@@ -35,7 +35,10 @@ class OntologyV04Tests(unittest.TestCase):
         self.assertEqual(source["schema_version"], "0.2")
         migrate(source)
         self.assertEqual(source["schema_version"], "0.4")
-        self.assertEqual(validate_record(source, "migrated"), [])
+        self.assertTrue(any(
+            "clause_ontology" in error and "resolved authoritative" in error
+            for error in validate_record(source, "migrated")
+        ))
 
     def test_v04_migration_is_exact_noop_and_unknown_rejected(self) -> None:
         record = copy.deepcopy(FIXTURE)
@@ -119,7 +122,10 @@ class OntologyV04Tests(unittest.TestCase):
             {"dimension": "dependencies", "scope": {"kind": "record"}, "completeness": "complete", "omission": "none", "evidence": "empty"},
         ]
         record["dependencies"] = []
-        self.assertEqual(validate_record(record, "scoped"), [])
+        self.assertTrue(any(
+            "np_internal_constituency" in error and "unannotated/omitted" in error
+            for error in validate_record(record, "scoped")
+        ))
         self.assertTrue(coverage_allows_score(record, "np_internal_constituency", "subj"))
         self.assertFalse(coverage_allows_score(record, "np_internal_constituency", "obj"))
         record["annotation_scope"]["dimensions"][0]["completeness"] = "partial"

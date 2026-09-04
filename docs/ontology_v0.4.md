@@ -92,6 +92,14 @@ confirmed empty set. These evidence states must agree with the canonical
 collection content at their declared scope: absence of annotation is not
 negative gold.
 
+The shared authoritative-payload contract makes this content check executable:
+`present` requires resolved authoritative payload in the effective scope;
+unresolved candidates are review evidence, not canonical resolved truth. Each
+dimension declares its payload family and properties in the executable registry,
+and typed payload contributes only to the dimension that owns its relation type.
+Where confirmed-empty is supported, it is explicit positive gold and cannot
+coexist with authoritative payload owned by that dimension and scope.
+
 The executable dimension registry is the V0.4 scope/evidence contract. The
 table below summarizes its stable capabilities; it does not replace the typed
 payload definitions.

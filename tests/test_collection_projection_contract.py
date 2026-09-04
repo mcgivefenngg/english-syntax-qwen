@@ -80,7 +80,7 @@ class CollectionProjectionContractTests(unittest.TestCase):
 
         record = record_with("dependencies", declaration("dependencies", {"kind": "record"}), [DEPENDENCY])
         record["annotation_scope"]["dimensions"].append(
-            declaration("syntactic_function", {"kind": "node", "node": "obj"}, "omitted", "intentional", "unannotated")
+            declaration("syntactic_function", {"kind": "node", "node": "obj"})
         )
         self.assertEqual(validate_record(record, "dependency-owner-isolation"), [])
         self.assertEqual(linguistic_projection(record)["dependencies"], [DEPENDENCY])
