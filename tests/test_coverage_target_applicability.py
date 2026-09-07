@@ -202,5 +202,111 @@ class CoverageTargetApplicabilityTests(unittest.TestCase):
         self.assertEqual(invalid_kinds, {"wrong_owner"})
 
 
+class SyntacticFunctionTargetOwnerTests(unittest.TestCase):
+    def assert_rejected(self, record: dict[str, Any], target: str) -> None:
+        with self.assertRaises(CoverageResolutionError):
+            resolve_coverage(record, "syntactic_function", target)
+        decision = resolve_scoring_eligibility(record, "syntactic_function", target)
+        self.assertFalse(decision.scoreable)
+        self.assertIsNone(decision.coverage_state)
+
+    def record_with_record_coverage(self) -> dict[str, Any]:
+        return record_with("syntactic_function", declaration("syntactic_function", {"kind": "record"}))
+
+    def with_clause_valued_wrapper(self, record: dict[str, Any]) -> dict[str, Any]:
+        record["constituents"].append({
+            "id": "clause-wrapper",
+            "node_kind": "clause",
+            "clause_ref": "c0",
+            "span": {"start": 0, "end": 5},
+            "function": "complement",
+            "realization": {"clause_ref": "c0", "relation": "same_span_alias"},
+        })
+        return record
+
+    def test_canonical_root_clause_is_not_a_syntactic_function_target(self) -> None:
+        validation = validate_coverage_target(FIXTURE, "syntactic_function", "c0")
+        self.assertFalse(validation.valid)
+        self.assertEqual(validation.target_kind, "wrong_owner")
+        self.assert_rejected(self.record_with_record_coverage(), "c0")
+
+    def test_nonroot_canonical_clause_is_not_a_syntactic_function_target(self) -> None:
+        record = self.record_with_record_coverage()
+        record["clauses"].append({
+            "id": "c1",
+            "span": {"start": 3, "end": 5},
+            "node_kind": "clause",
+            "finiteness": "finite",
+            "clause_construction": "relative",
+            "integration": ["subordinate"],
+            "integration_parent": "c0",
+        })
+        validation = validate_coverage_target(record, "syntactic_function", "c1")
+        self.assertFalse(validation.valid)
+        self.assertEqual(validation.target_kind, "wrong_owner")
+        self.assert_rejected(record, "c1")
+
+    def test_clause_valued_constituent_wrapper_is_a_valid_syntactic_function_target(self) -> None:
+        record = self.with_clause_valued_wrapper(self.record_with_record_coverage())
+        self.assertEqual(validate_record(record, "wrapper-owner"), [])
+        validation = validate_coverage_target(record, "syntactic_function", "clause-wrapper")
+        self.assertTrue(validation.valid)
+        self.assertEqual(validation.target_kind, "dimension_node")
+        self.assertIs(resolve_coverage(record, "syntactic_function", "clause-wrapper"), CoverageState.COMPLETE)
+        self.assertTrue(resolve_scoring_eligibility(record, "syntactic_function", "clause-wrapper").scoreable)
+
+    def test_phrase_constituent_remains_a_valid_syntactic_function_target(self) -> None:
+        record = self.record_with_record_coverage()
+        self.assertTrue(validate_coverage_target(record, "syntactic_function", "obj").valid)
+        self.assertIs(resolve_coverage(record, "syntactic_function", "obj"), CoverageState.COMPLETE)
+
+    def test_word_target_syntactic_function_ownership_is_unchanged(self) -> None:
+        record = self.record_with_record_coverage()
+        validation = validate_coverage_target(record, "syntactic_function", "w2")
+        self.assertTrue(validation.valid)
+        self.assertEqual(validation.node_kind, "word")
+        self.assertIs(resolve_coverage(record, "syntactic_function", "w2"), CoverageState.COMPLETE)
+
+    def test_record_level_syntactic_function_coverage_does_not_make_canonical_clause_scoreable(self) -> None:
+        self.assert_rejected(self.record_with_record_coverage(), "c0")
+        self.assert_rejected(copy.deepcopy(FIXTURE), "c0")
+
+    def test_node_level_declaration_on_canonical_clause_fails_closed(self) -> None:
+        record = record_with("syntactic_function", declaration("syntactic_function", {"kind": "node", "node": "c0"}))
+        errors = validate_record(record, "clause-function-scope")
+        self.assertTrue(any("canonical clause" in error for error in errors))
+        self.assert_rejected(record, "c0")
+
+    def test_unknown_syntactic_function_target_kind_is_unchanged(self) -> None:
+        validation = validate_coverage_target(FIXTURE, "syntactic_function", "nope")
+        self.assertFalse(validation.valid)
+        self.assertEqual(validation.target_kind, "unknown_target")
+
+    def test_unwrapped_nonroot_clause_still_requires_wrapper_under_complete_coverage(self) -> None:
+        record = self.record_with_record_coverage()
+        record["clauses"].append({
+            "id": "c1",
+            "span": {"start": 3, "end": 5},
+            "node_kind": "clause",
+            "finiteness": "finite",
+            "clause_construction": "relative",
+            "integration": ["subordinate"],
+            "integration_parent": "c0",
+        })
+        errors = validate_record(record, "unwrapped-clause")
+        self.assertTrue(any("requires an external realization wrapper for clause 'c1'" in error for error in errors))
+        record["constituents"].append({
+            "id": "c1-wrapper",
+            "node_kind": "clause",
+            "clause_ref": "c1",
+            "span": {"start": 3, "end": 5},
+            "function": "relative_modifier",
+            "realization": {"clause_ref": "c1", "relation": "same_span_alias"},
+        })
+        errors = validate_record(record, "wrapped-clause")
+        self.assertFalse(any("requires an external realization wrapper" in error for error in errors))
+        self.assertTrue(validate_coverage_target(record, "syntactic_function", "c1-wrapper").valid)
+
+
 if __name__ == "__main__":
     unittest.main()

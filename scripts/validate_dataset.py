@@ -45,13 +45,11 @@ except ImportError:
 
 try:
     from coverage_resolution import (
-        CoverageResolutionError, CoverageState, coverage_declaration_issues,
-        coverage_scope_key, resolve_coverage, resolve_scoring_eligibility,
+        coverage_declaration_issues, coverage_scope_key, resolve_scoring_eligibility,
     )
 except ImportError:
     from scripts.coverage_resolution import (
-        CoverageResolutionError, CoverageState, coverage_declaration_issues,
-        coverage_scope_key, resolve_coverage, resolve_scoring_eligibility,
+        coverage_declaration_issues, coverage_scope_key, resolve_scoring_eligibility,
     )
 
 try:
@@ -1221,15 +1219,34 @@ def validate_record(record: Any, location: str, schema_path: Path | None = None)
             item.get("clause_ref") for item in record["constituents"]
             if isinstance(item, dict) and item.get("node_kind") == "clause" and isinstance(item.get("clause_ref"), str)
         }
+        annotation_scope = record.get("annotation_scope")
+        coverage_entries = annotation_scope.get("dimensions", []) if isinstance(annotation_scope, dict) else []
+        if not isinstance(coverage_entries, list):
+            coverage_entries = []
         for clause in record.get("clauses", []):
             if not isinstance(clause, dict) or "root" in (clause.get("integration") or []) or clause.get("id") in wrapped_clause_ids:
                 continue
-            try:
-                function_coverage_applies = resolve_coverage(
-                    record, "syntactic_function", clause.get("id")
-                ) is CoverageState.COMPLETE
-            except CoverageResolutionError:
-                function_coverage_applies = False
+            clause_span = clause.get("span") if isinstance(clause.get("span"), dict) else {}
+            clause_start, clause_end = clause_span.get("start"), clause_span.get("end")
+            function_coverage_applies = False
+            for entry in coverage_entries:
+                if not isinstance(entry, dict) or entry.get("dimension") != "syntactic_function" or entry.get("omission") != "none" or entry.get("completeness") != "complete":
+                    continue
+                coverage_scope = entry.get("scope") if isinstance(entry.get("scope"), dict) else {}
+                if coverage_scope.get("kind") == "record":
+                    function_coverage_applies = True
+                elif (
+                    coverage_scope.get("kind") == "region"
+                    and type(coverage_scope.get("start")) is int
+                    and type(coverage_scope.get("end")) is int
+                    and type(clause_start) is int
+                    and type(clause_end) is int
+                    and coverage_scope["start"] <= clause_start
+                    and clause_end <= coverage_scope["end"]
+                ):
+                    function_coverage_applies = True
+                if function_coverage_applies:
+                    break
             if function_coverage_applies:
                 _error(errors, location, f"complete syntactic-function coverage requires an external realization wrapper for clause {clause.get('id')!r}")
 

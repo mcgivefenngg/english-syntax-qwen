@@ -202,6 +202,13 @@ def validate_coverage_target(
             f"dimension {dimension!r} target {target!r} must reference a canonical clause node",
             node_kind=node_kind,
         )
+    if spec.target_owner == "syntactic_function_owner" and collection == "clauses":
+        return _coverage_target_result(
+            False,
+            "wrong_owner",
+            f"dimension {dimension!r} target {target!r} is a canonical clause; external syntactic function belongs on a constituent realization owner",
+            node_kind=node_kind,
+        )
     if spec.target_owner == "np_phrase" and (collection != "constituents" or node_kind != "phrase" or item.get("phrase_category") != "NP"):
         return _coverage_target_result(
             False,

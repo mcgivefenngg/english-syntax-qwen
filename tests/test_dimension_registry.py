@@ -113,6 +113,7 @@ class DimensionRegistryTests(unittest.TestCase):
         self.assertEqual(DIMENSION_REGISTRY["clause_structure"].target_owner, "canonical_clause")
         self.assertEqual(DIMENSION_REGISTRY["np_internal_constituency"].target_owner, "np_phrase")
         self.assertEqual(DIMENSION_REGISTRY["lexical_valency"].target_owner, "lexical_head_word")
+        self.assertEqual(DIMENSION_REGISTRY["syntactic_function"].target_owner, "syntactic_function_owner")
         self.assertEqual(DIMENSION_REGISTRY["dependencies"].partial_present_target_source, "record")
         self.assertEqual(DIMENSION_REGISTRY["semantic_roles"].partial_present_target_source, "record")
         self.assertTrue(DIMENSION_REGISTRY["semantic_roles"].target_lemma_optional)

@@ -183,7 +183,7 @@ _DIMENSIONS = {
             _payload("typed_relation", "function"),
             _payload("complements", "value"),
             _payload("adjuncts", "value"),
-        ), target_fields=("id",),
+        ), target_fields=("id",), target_owner="syntactic_function_owner",
     ),
     "vp_complementation": _spec(
         "vp_complementation", scopes={"record", "node", "region"}, nodes={"phrase", "clause"},
