@@ -261,6 +261,70 @@ class AuthoritativePayloadContractTests(unittest.TestCase):
         )
         self.assertTrue(all(item.status == "resolved" for item in items))
 
+    def test_nested_construction_arguments_and_entities_are_enumerated(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        typed = record["canonical_analysis"]["typed_analysis"]
+        typed["status"] = "established"
+        typed["relations"] = [
+            {
+                "id": "rel-entity-ref",
+                "type": "construction",
+                "arity": "binary",
+                "source": {"namespace": "word", "id": "w1"},
+                "target": {"namespace": "analysis", "id": "e1"},
+            },
+            {
+                "id": "rel-dependency-ref",
+                "type": "dependency",
+                "arity": "binary",
+                "source": "word:w2",
+                "target": "analysis:e2",
+            },
+        ]
+        typed["arguments"] = {"a1": {"kind": "subject", "target": "subj"}}
+        typed["entities"] = [{"id": "e1", "kind": "clause"}, {"id": "e2", "kind": "understood_subject"}]
+        items = authoritative_payload_items(record, "construction_relations")
+        by_field: dict[str, set[str]] = {}
+        for item in items:
+            by_field.setdefault(item.field, set()).add(item.identifier)
+        self.assertEqual(by_field.get("typed_arguments"), {"typed_arguments[a1]"})
+        self.assertEqual(by_field.get("typed_entity"), {"e1"})
+        self.assertEqual(by_field.get("typed_relation"), {"rel-entity-ref"})
+        argument = next(item for item in items if item.field == "typed_arguments")
+        self.assertEqual(argument.path, ("canonical_analysis", "typed_analysis", "arguments", "a1"))
+        self.assertEqual(argument.status, "resolved")
+        self.assertEqual(authoritative_payload_items(record, "dependencies"), ())
+
+    def test_typed_arguments_container_forms_are_enumerated(self) -> None:
+        base = copy.deepcopy(FIXTURE)
+        base["canonical_analysis"]["typed_analysis"]["status"] = "established"
+        forms = (
+            ([{"kind": "subject", "target": "subj"}], {"typed_arguments[0]"}, ("canonical_analysis", "typed_analysis", "arguments", 0)),
+            ({"kind": "subject", "target": "subj"}, {"typed_arguments"}, ("canonical_analysis", "typed_analysis", "arguments")),
+            ({"a1": {"id": "arg-a1", "kind": "subject"}}, {"arg-a1"}, ("canonical_analysis", "typed_analysis", "arguments", "a1")),
+            ("literal", {"typed_arguments"}, ("canonical_analysis", "typed_analysis", "arguments")),
+        )
+        for arguments, expected_identifiers, expected_path in forms:
+            with self.subTest(arguments=arguments):
+                record = copy.deepcopy(base)
+                record["canonical_analysis"]["typed_analysis"]["arguments"] = copy.deepcopy(arguments)
+                items = [
+                    item for item in authoritative_payload_items(record, "construction_relations")
+                    if item.field == "typed_arguments"
+                ]
+                self.assertEqual({item.identifier for item in items}, expected_identifiers)
+                self.assertEqual(items[0].path, expected_path)
+
+    def test_unresolved_typed_analysis_marks_nested_items_unresolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        typed = record["canonical_analysis"]["typed_analysis"]
+        typed["status"] = "unresolved"
+        typed["arguments"] = {"a1": {"kind": "subject", "target": "subj"}}
+        typed["entities"] = [{"id": "e1", "kind": "clause"}, {"kind": "anonymous"}]
+        items = authoritative_payload_items(record, "construction_relations")
+        statuses = {item.identifier: item.status for item in items if item.field in {"typed_arguments", "typed_entity"}}
+        self.assertEqual(statuses, {"typed_arguments[a1]": "unresolved", "e1": "unresolved", "typed_entity[1]": "missing"})
+
     def test_semantic_role_without_predicate_is_resolved_payload(self) -> None:
         record = copy.deepcopy(FIXTURE)
         record["semantic_roles"] = [{"constituent": "obj", "role": "Theme"}]

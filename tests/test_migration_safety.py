@@ -318,6 +318,161 @@ class MigrationSafetyTests(unittest.TestCase):
                 self.assertNotIn("construction_type_unscoped", record.get("legacy_annotations", {}))
                 self.assertEqual(validate_record(record, f"covered-construction-{transform.__name__}"), [])
 
+    def test_uncovered_nested_construction_arguments_and_entities_are_quarantined(self) -> None:
+        argument = {"kind": "subject", "target": "subj"}
+        entity = {"id": "e1", "kind": "clause"}
+        for transform in (migrate, repair_record):
+            with self.subTest(transform=transform.__name__):
+                record = self.legacy_record() if transform is migrate else copy.deepcopy(FIXTURE)
+                typed = record["canonical_analysis"]["typed_analysis"]
+                typed["status"] = "established"
+                typed["arguments"] = {"a1": copy.deepcopy(argument)}
+                typed["entities"] = [copy.deepcopy(entity)]
+                transform(record)
+                typed = record["canonical_analysis"]["typed_analysis"]
+                self.assertNotIn("arguments", typed)
+                self.assertEqual(typed["entities"], [])
+                self.assertEqual(record["legacy_annotations"]["typed_arguments_unscoped"], [argument])
+                self.assertEqual(record["legacy_annotations"]["typed_entity_unscoped"], [entity])
+                self.assertTrue(record["migration_review_required"])
+                self.assertEqual(validate_record(record, f"nested-quarantine-{transform.__name__}"), [])
+
+    def test_covered_nested_construction_arguments_and_entities_are_preserved(self) -> None:
+        argument = {"id": "a1", "kind": "subject", "target": "subj"}
+        entity = {"id": "e1", "kind": "clause"}
+        for transform in (migrate, repair_record):
+            with self.subTest(transform=transform.__name__):
+                record = self._construction_record(transform, "construction_type", "transitive", evidence="present")
+                typed = record["canonical_analysis"]["typed_analysis"]
+                typed["status"] = "established"
+                typed["arguments"] = {"a1": copy.deepcopy(argument)}
+                typed["entities"] = [copy.deepcopy(entity)]
+                transform(record)
+                typed = record["canonical_analysis"]["typed_analysis"]
+                self.assertEqual(typed["arguments"], {"a1": argument})
+                self.assertEqual(typed["entities"], [entity])
+                self.assertNotIn("typed_arguments_unscoped", record.get("legacy_annotations", {}))
+                self.assertNotIn("typed_entity_unscoped", record.get("legacy_annotations", {}))
+                self.assertEqual(validate_record(record, f"nested-covered-{transform.__name__}"), [])
+
+    def test_mixed_status_nested_items_are_quarantined_itemwise(self) -> None:
+        covered_relation = {
+            "id": "rel-covered",
+            "type": "construction",
+            "arity": "binary",
+            "source": {"namespace": "word", "id": "w2"},
+            "target": {"namespace": "constituent", "id": "obj"},
+        }
+        uncovered_relation = {
+            "id": "rel-uncovered",
+            "type": "construction",
+            "arity": "binary",
+            "status": "unresolved",
+            "source": {"namespace": "word", "id": "w2"},
+            "target": {"namespace": "constituent", "id": "subj"},
+        }
+        uncovered_argument = {"id": "a2", "kind": "object", "status": "unresolved", "target": "obj"}
+        for transform in (migrate, repair_record):
+            with self.subTest(transform=transform.__name__):
+                record = self._construction_record(transform, "construction_type", "transitive", evidence="present")
+                typed = record["canonical_analysis"]["typed_analysis"]
+                typed["status"] = "established"
+                typed["relations"] = [copy.deepcopy(covered_relation), copy.deepcopy(uncovered_relation)]
+                typed["arguments"] = {
+                    "a1": {"id": "a1", "kind": "subject", "target": "subj"},
+                    "a2": copy.deepcopy(uncovered_argument),
+                }
+                transform(record)
+                typed = record["canonical_analysis"]["typed_analysis"]
+                self.assertEqual(typed["relations"], [covered_relation])
+                self.assertEqual(typed["arguments"], {"a1": {"id": "a1", "kind": "subject", "target": "subj"}})
+                self.assertEqual(record["legacy_annotations"]["typed_relation_unscoped"], [uncovered_relation])
+                self.assertEqual(record["legacy_annotations"]["typed_arguments_unscoped"], [uncovered_argument])
+                self.assertTrue(record["migration_review_required"])
+                self.assertEqual(validate_record(record, f"nested-mixed-{transform.__name__}"), [])
+
+    def test_entity_referenced_by_non_construction_relation_is_not_quarantined(self) -> None:
+        entity = {"id": "e1", "kind": "understood_subject"}
+        relation = {
+            "id": "rel-dependency",
+            "type": "dependency",
+            "arity": "binary",
+            "status": "established",
+            "source": "word:w2",
+            "target": "analysis:e1",
+        }
+        for transform in (migrate, repair_record):
+            with self.subTest(transform=transform.__name__):
+                record = self.legacy_record() if transform is migrate else copy.deepcopy(FIXTURE)
+                dependency_entry = next(
+                    entry for entry in record["annotation_scope"]["dimensions"]
+                    if entry["dimension"] == "dependencies"
+                )
+                dependency_entry["completeness"] = "partial"
+                dependency_entry["omission"] = "none"
+                dependency_entry["evidence"] = "present"
+                typed = record["canonical_analysis"]["typed_analysis"]
+                typed["status"] = "unresolved"
+                typed["relations"] = [copy.deepcopy(relation)]
+                typed["entities"] = [copy.deepcopy(entity)]
+                transform(record)
+                typed = record["canonical_analysis"]["typed_analysis"]
+                self.assertEqual(typed["entities"], [entity])
+                self.assertEqual(typed["relations"], [relation])
+                self.assertNotIn("typed_entity_unscoped", record.get("legacy_annotations", {}))
+                self.assertEqual(validate_record(record, f"entity-guard-{transform.__name__}"), [])
+
+    def test_unresolved_entity_referenced_by_covered_relation_is_preserved(self) -> None:
+        entity = {"id": "e1", "kind": "clause"}
+        relation = {
+            "id": "rel-covered",
+            "type": "construction",
+            "arity": "binary",
+            "status": "established",
+            "source": {"namespace": "word", "id": "w2"},
+            "target": {"namespace": "analysis", "id": "e1"},
+        }
+        for transform in (migrate, repair_record):
+            with self.subTest(transform=transform.__name__):
+                record = self._construction_record(transform, "construction_type", "transitive", evidence="present")
+                typed = record["canonical_analysis"]["typed_analysis"]
+                typed["status"] = "unresolved"
+                typed["relations"] = [copy.deepcopy(relation)]
+                typed["entities"] = [copy.deepcopy(entity)]
+                transform(record)
+                typed = record["canonical_analysis"]["typed_analysis"]
+                self.assertEqual(typed["relations"], [relation])
+                self.assertEqual(typed["entities"], [entity])
+                self.assertNotIn("typed_entity_unscoped", record.get("legacy_annotations", {}))
+                self.assertEqual(validate_record(record, f"covered-entity-ref-{transform.__name__}"), [])
+
+    def test_uncovered_nested_payload_in_alternative_analysis_is_quarantined(self) -> None:
+        argument = {"kind": "subject", "target": "subj"}
+        entity = {"id": "e1", "kind": "clause"}
+        for transform in (migrate, repair_record):
+            with self.subTest(transform=transform.__name__):
+                record = self.legacy_record() if transform is migrate else copy.deepcopy(FIXTURE)
+                record["alternative_analyses"] = [{
+                    "id": "alt-1",
+                    "framework": "CGEL",
+                    "status": "established",
+                    "typed_analysis": {
+                        "kind": "record_level_analysis",
+                        "framework": "CGEL",
+                        "status": "established",
+                        "arguments": {"a1": copy.deepcopy(argument)},
+                        "entities": [copy.deepcopy(entity)],
+                    },
+                }]
+                transform(record)
+                typed = record["alternative_analyses"][0]["typed_analysis"]
+                self.assertNotIn("arguments", typed)
+                self.assertEqual(typed["entities"], [])
+                self.assertIn("typed_arguments_unscoped", record["legacy_annotations"])
+                self.assertIn("typed_entity_unscoped", record["legacy_annotations"])
+                self.assertTrue(record["migration_review_required"])
+                self.assertEqual(validate_record(record, f"alt-nested-{transform.__name__}"), [])
+
     def test_migration_downgrades_complete_intentional_unannotated(self) -> None:
         record = self.migrate_with([
             declaration("dependencies", {"kind": "record"}, "complete", "intentional", "unannotated"),

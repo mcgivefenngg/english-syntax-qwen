@@ -21,6 +21,32 @@ _EVIDENCE = {"present", "empty", "unannotated"}
 _EXCLUDED_COMPLETENESS = {"unannotated", "omitted", "out_of_scope"}
 _COLLECTION_COVERAGE_DIMENSIONS = {"dependencies", "semantic_roles", "lexical_valency"}
 _COVERAGE_FIELDS = ("dimension", "scope", "completeness", "omission", "evidence", "notes")
+_NESTED_CONSTRUCTION_CONTAINERS = {
+    "typed_relation": "relations",
+    "typed_arguments": "arguments",
+    "typed_entity": "entities",
+}
+
+
+def _analysis_referenced_entity_ids(relations: Any) -> set[str]:
+    """Collect analysis-namespace entity ids referenced by the given relations."""
+    referenced: set[str] = set()
+    if not isinstance(relations, list):
+        return referenced
+    for relation in relations:
+        if not isinstance(relation, dict):
+            continue
+        for key in ("source", "target"):
+            reference = relation.get(key)
+            if isinstance(reference, str) and ":" in reference:
+                namespace, identifier = reference.split(":", 1)
+            elif isinstance(reference, dict):
+                namespace, identifier = reference.get("namespace"), reference.get("id")
+            else:
+                continue
+            if namespace == "analysis" and isinstance(identifier, str) and identifier:
+                referenced.add(identifier)
+    return referenced
 
 
 def preserve_legacy(record: dict[str, Any], key: str, value: Any) -> None:
@@ -316,8 +342,9 @@ def quarantine_uncovered_collection_content(
         ]
         covered_paths: set[tuple[str | int, ...]] = set()
         uncovered_by_field: dict[str, list[Any]] = {}
-        for item in construction_items:
-            covered = any(
+
+        def entry_covered(item: Any) -> bool:
+            return any(
                 entry.get("scope", {}).get("kind") == "record"
                 and entry.get("omission") == "none"
                 and entry.get("completeness") not in _EXCLUDED_COMPLETENESS
@@ -326,11 +353,32 @@ def quarantine_uncovered_collection_content(
                 for entry in construction_entries
                 if isinstance(entry.get("scope"), dict)
             )
-            if covered:
+
+        covered_entity_refs: dict[tuple[str | int, ...], set[str]] = {}
+        for item in construction_items:
+            if item.field == "typed_entity":
+                continue
+            if entry_covered(item):
                 covered_paths.add(item.path)
+                if item.field == "typed_relation" and isinstance(item.value, dict) and len(item.path) >= 2:
+                    covered_entity_refs.setdefault(item.path[:-2], set()).update(
+                        _analysis_referenced_entity_ids([item.value])
+                    )
             else:
                 uncovered_by_field.setdefault(item.field, []).append(item.value)
                 review_required = True
+        for item in construction_items:
+            if item.field != "typed_entity":
+                continue
+            if entry_covered(item):
+                covered_paths.add(item.path)
+                continue
+            analysis_path = item.path[:-2] if len(item.path) >= 2 and item.path[-2] == "entities" else item.path[:-1]
+            if isinstance(item.value, dict) and item.value.get("id") in covered_entity_refs.get(analysis_path, set()):
+                covered_paths.add(item.path)
+                continue
+            uncovered_by_field.setdefault(item.field, []).append(item.value)
+            review_required = True
 
         for field, values in uncovered_by_field.items():
             if field == "construction_tags" and len(values) == 1:
@@ -343,7 +391,7 @@ def quarantine_uncovered_collection_content(
 
         top_level_fields = {
             item.field for item in construction_items
-            if item.field != "typed_relation"
+            if item.field not in {"typed_relation", "typed_arguments", "typed_entity"}
         }
         for field in top_level_fields:
             values = [item for item in construction_items if item.field == field]
@@ -365,32 +413,55 @@ def quarantine_uncovered_collection_content(
             else:
                 record.pop(field, None)
 
-        relation_groups: dict[tuple[str | int, ...], list[Any]] = {}
+        nested_groups: dict[tuple[str | int, ...], tuple[tuple[str | int, ...], str, list[Any]]] = {}
         for item in construction_items:
-            if item.field != "typed_relation":
+            container_key = _NESTED_CONSTRUCTION_CONTAINERS.get(item.field)
+            if container_key is None:
                 continue
-            relation_groups.setdefault(item.path[:-2], []).append(item)
-        for group_path, values in relation_groups.items():
+            if len(item.path) >= 2 and item.path[-2] == container_key:
+                analysis_path = item.path[:-2]
+            elif len(item.path) >= 1 and item.path[-1] == container_key:
+                analysis_path = item.path[:-1]
+            else:
+                continue
+            group = nested_groups.setdefault(analysis_path + (container_key,), (analysis_path, container_key, []))
+            group[2].append(item)
+        for analysis_path, container_key, values in nested_groups.values():
             parent: Any = record
             try:
-                for key in group_path:
+                for key in analysis_path:
                     parent = parent[key]
             except (IndexError, KeyError, TypeError):
                 continue
             if not isinstance(parent, dict):
                 continue
-            relations = parent.get("relations")
-            if isinstance(relations, list):
-                parent["relations"] = [
-                    relation for index, relation in enumerate(relations)
-                    if not any(
-                        item.path == group_path + ("relations", index)
-                        and item.path not in covered_paths
-                        for item in values
-                    )
+            current = parent.get(container_key)
+            uncovered_paths = {item.path for item in values if item.path not in covered_paths}
+            whole_container_path = analysis_path + (container_key,)
+            if any(item.path == whole_container_path for item in values):
+                if whole_container_path in uncovered_paths:
+                    parent.pop(container_key, None)
+                continue
+            if isinstance(current, list):
+                retained = [
+                    value for index, value in enumerate(current)
+                    if analysis_path + (container_key, index) not in uncovered_paths
                 ]
-            elif any(item.path not in covered_paths for item in values):
-                parent.pop("relations", None)
+                if retained or container_key != "arguments":
+                    parent[container_key] = retained
+                else:
+                    parent.pop(container_key, None)
+            elif isinstance(current, dict):
+                retained = {
+                    key: value for key, value in current.items()
+                    if analysis_path + (container_key, key) not in uncovered_paths
+                }
+                if retained:
+                    parent[container_key] = retained
+                else:
+                    parent.pop(container_key, None)
+            elif uncovered_paths:
+                parent.pop(container_key, None)
     return review_required
 
 

@@ -657,6 +657,154 @@ def _construction_payload_item_status(record: dict[str, Any], field_name: str, v
     return "missing"
 
 
+def _typed_reference_namespace_pair(reference: Any) -> tuple[Any, Any]:
+    if isinstance(reference, str) and ":" in reference:
+        namespace, identifier = reference.split(":", 1)
+        return namespace, identifier
+    if isinstance(reference, dict):
+        return reference.get("namespace"), reference.get("id")
+    return None, None
+
+
+def _typed_nested_status(typed: dict[str, Any], value: Any) -> str:
+    if not isinstance(value, dict):
+        return "missing"
+    status = value.get("status", typed.get("status"))
+    if status in {"descriptive", "established"}:
+        return "resolved"
+    if status in {"unresolved", "review_required"}:
+        return "unresolved"
+    return "missing"
+
+
+def _typed_entity_status(typed: dict[str, Any], entity: Any) -> str:
+    if not isinstance(entity, dict) or not isinstance(entity.get("id"), str) or not entity["id"] or not isinstance(entity.get("kind"), str) or not entity["kind"]:
+        return "missing"
+    return _typed_nested_status(typed, entity)
+
+
+def _non_construction_referenced_entity_ids(typed: dict[str, Any], relation_types: set[str]) -> set[str]:
+    """Collect entity ids referenced by relations outside the construction-owned types."""
+    referenced: set[str] = set()
+    relations = typed.get("relations")
+    if not isinstance(relations, list):
+        return referenced
+    for relation in relations:
+        if not isinstance(relation, dict) or relation.get("type") in relation_types:
+            continue
+        for key in ("source", "target"):
+            namespace, identifier = _typed_reference_namespace_pair(relation.get(key))
+            if namespace == "analysis" and isinstance(identifier, str) and identifier:
+                referenced.add(identifier)
+    return referenced
+
+
+def _typed_argument_entries(
+    typed: dict[str, Any],
+    spec: DimensionSpec,
+    analysis_path: tuple[str | int, ...],
+) -> list[tuple[str, Any, tuple[str | int, ...]]]:
+    entries: list[tuple[str, Any, tuple[str | int, ...]]] = []
+    if "arguments" not in typed or typed.get("arguments") is None:
+        return entries
+    value = typed["arguments"]
+    payload = _payload_spec(spec, "typed_arguments")
+    argument_fields = set(payload.properties) if payload is not None else set()
+
+    def identifier_for(item: Any, fallback: str) -> str:
+        if isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"]:
+            return item["id"]
+        return fallback
+
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            entries.append((identifier_for(item, f"typed_arguments[{index}]"), item, analysis_path + ("arguments", index)))
+    elif isinstance(value, dict):
+        if any(key in argument_fields for key in value):
+            entries.append((identifier_for(value, "typed_arguments"), value, analysis_path + ("arguments",)))
+        else:
+            for key, item in value.items():
+                entries.append((identifier_for(item, f"typed_arguments[{key}]"), item, analysis_path + ("arguments", key)))
+    elif value not in (None, {}, []):
+        entries.append(("typed_arguments", value, analysis_path + ("arguments",)))
+    return entries
+
+
+def _typed_entity_entries(
+    typed: dict[str, Any],
+    analysis_path: tuple[str | int, ...],
+    preserved_ids: set[str],
+) -> list[tuple[str, Any, tuple[str | int, ...]]]:
+    entries: list[tuple[str, Any, tuple[str | int, ...]]] = []
+    if "entities" not in typed or typed.get("entities") is None:
+        return entries
+    entities = typed["entities"]
+    if isinstance(entities, list):
+        for index, entity in enumerate(entities):
+            if isinstance(entity, dict) and isinstance(entity.get("id"), str) and entity["id"] in preserved_ids:
+                continue
+            identifier = entity.get("id") if isinstance(entity, dict) and isinstance(entity.get("id"), str) and entity["id"] else f"typed_entity[{index}]"
+            entries.append((identifier, entity, analysis_path + ("entities", index)))
+    elif entities not in (None, {}, []):
+        entries.append(("typed_entity", entities, analysis_path + ("entities",)))
+    return entries
+
+
+def _construction_typed_payload_items(
+    record: dict[str, Any],
+    spec: DimensionSpec,
+) -> list[AuthoritativePayloadItem]:
+    items: list[AuthoritativePayloadItem] = []
+    relation_specs = [
+        payload for payload in spec.payloads
+        if payload.field == "typed_relation" and payload.relation_types
+    ]
+    relation_types = set().union(*(payload.relation_types for payload in relation_specs)) if relation_specs else set()
+    for analysis_path, typed in _typed_analysis_paths(record):
+        if relation_types and _has_field(spec, "typed_relation"):
+            relations = typed.get("relations")
+            if isinstance(relations, list):
+                for index, relation in enumerate(relations):
+                    if not isinstance(relation, dict) or relation.get("type") not in relation_types:
+                        continue
+                    identifier = relation.get("id") if isinstance(relation.get("id"), str) else f"typed_relation[{index}]"
+                    items.append(AuthoritativePayloadItem(
+                        field="typed_relation",
+                        identifier=identifier,
+                        value=relation,
+                        status=_typed_relation_status(typed, relation),
+                        path=analysis_path + ("relations", index),
+                    ))
+            elif relations not in (None, {}, []):
+                items.append(AuthoritativePayloadItem(
+                    field="typed_relation",
+                    identifier="typed_relation",
+                    value=relations,
+                    status="missing",
+                    path=analysis_path + ("relations",),
+                ))
+        if _has_field(spec, "typed_arguments"):
+            for identifier, value, path in _typed_argument_entries(typed, spec, analysis_path):
+                items.append(AuthoritativePayloadItem(
+                    field="typed_arguments",
+                    identifier=identifier,
+                    value=value,
+                    status=_typed_nested_status(typed, value),
+                    path=path,
+                ))
+        if _has_field(spec, "typed_entity"):
+            preserved_ids = _non_construction_referenced_entity_ids(typed, relation_types)
+            for identifier, value, path in _typed_entity_entries(typed, analysis_path, preserved_ids):
+                items.append(AuthoritativePayloadItem(
+                    field="typed_entity",
+                    identifier=identifier,
+                    value=value,
+                    status=_typed_entity_status(typed, value),
+                    path=path,
+                ))
+    return items
+
+
 def _typed_analysis_paths(record: dict[str, Any]) -> list[tuple[tuple[str | int, ...], dict[str, Any]]]:
     paths: list[tuple[tuple[str | int, ...], dict[str, Any]]] = []
     for field_name in ("canonical_analysis", "preferred_analysis"):
@@ -712,33 +860,7 @@ def authoritative_payload_items(record: dict[str, Any], dimension: str) -> tuple
                 status=_construction_payload_item_status(record, field_name, value),
                 path=(field_name,),
             ))
-    relation_specs = [
-        payload for payload in spec.payloads
-        if payload.field == "typed_relation" and payload.relation_types
-    ]
-    relation_types = set().union(*(payload.relation_types for payload in relation_specs)) if relation_specs else set()
-    for analysis_path, typed in _typed_analysis_paths(record):
-        relations = typed.get("relations")
-        if isinstance(relations, list):
-            for index, relation in enumerate(relations):
-                if not isinstance(relation, dict) or relation.get("type") not in relation_types:
-                    continue
-                identifier = relation.get("id") if isinstance(relation.get("id"), str) else f"typed_relation[{index}]"
-                items.append(AuthoritativePayloadItem(
-                    field="typed_relation",
-                    identifier=identifier,
-                    value=relation,
-                    status=_typed_relation_status(typed, relation),
-                    path=analysis_path + ("relations", index),
-                ))
-        elif relations not in (None, {}, []):
-            items.append(AuthoritativePayloadItem(
-                field="typed_relation",
-                identifier="typed_relation",
-                value=relations,
-                status="missing",
-                path=analysis_path + ("relations",),
-            ))
+    items.extend(_construction_typed_payload_items(record, spec))
     return tuple(items)
 
 
