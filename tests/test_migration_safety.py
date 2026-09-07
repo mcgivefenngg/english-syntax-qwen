@@ -9,7 +9,7 @@ from typing import Any
 
 from scripts.data_common import read_jsonl
 from scripts.migrate_v021 import migrate, migrate_file
-from scripts.repair_v031_data import repair_file, repair_record
+from scripts.repair_v031_data import _repair_output_hash, repair_file, repair_record
 from scripts.validate_dataset import validate_record
 
 
@@ -330,6 +330,85 @@ class MigrationSafetyTests(unittest.TestCase):
         self.assertEqual(repaired["dependencies"], [])
         self.assertTrue(repaired["migration_review_required"])
         self.assertEqual(validate_record(repaired, "repair-present-safety"), [])
+
+    def test_direct_repair_rejects_protected_provenance_without_mutation(self) -> None:
+        for status in ("linguistically_reviewed", "approved_for_training", "canonical_gold"):
+            with self.subTest(status=status):
+                record = copy.deepcopy(FIXTURE)
+                record["review_metadata"]["review_status"] = status
+                before = copy.deepcopy(record)
+                with self.assertRaises(ValueError):
+                    repair_record(record)
+                self.assertEqual(record, before)
+
+    def test_repaired_output_hash_is_stable_and_repeat_safe(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "records.jsonl"
+            manifest = Path(directory) / "manifest.json"
+            path.write_text(json.dumps(copy.deepcopy(FIXTURE)) + "\n")
+            manifest.write_text(json.dumps({"records": [{"id": FIXTURE["id"], "source_version": "0.4"}]}))
+
+            repair_file(path, manifest)
+            once = path.read_bytes()
+            repaired = json.loads(once)
+            self.assertEqual(
+                repaired["migration_metadata"]["repair_output_hash"],
+                _repair_output_hash(repaired),
+            )
+
+            repair_file(path, manifest)
+            self.assertEqual(path.read_bytes(), once)
+            repair_file(path, manifest)
+            self.assertEqual(path.read_bytes(), once)
+
+    def test_tampered_repaired_record_fails_before_write(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "records.jsonl"
+            manifest = Path(directory) / "manifest.json"
+            path.write_text(json.dumps(copy.deepcopy(FIXTURE)) + "\n")
+            manifest.write_text(json.dumps({"records": [{"id": FIXTURE["id"], "source_version": "0.4"}]}))
+            repair_file(path, manifest)
+            tampered = json.loads(path.read_text())
+            tampered["sentence"] = "Tampered."
+            path.write_text(json.dumps(tampered) + "\n")
+            before = path.read_bytes()
+
+            with self.assertRaises(ValueError):
+                repair_file(path, manifest)
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_already_repaired_output_is_validated_even_with_matching_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "records.jsonl"
+            manifest = Path(directory) / "manifest.json"
+            path.write_text(json.dumps(copy.deepcopy(FIXTURE)) + "\n")
+            manifest.write_text(json.dumps({"records": [{"id": FIXTURE["id"], "source_version": "0.4"}]}))
+            repair_file(path, manifest)
+            invalid = json.loads(path.read_text())
+            invalid["sentence"] = ""
+            invalid["migration_metadata"]["repair_output_hash"] = _repair_output_hash(invalid)
+            path.write_text(json.dumps(invalid) + "\n")
+            before = path.read_bytes()
+
+            with self.assertRaisesRegex(ValueError, "canonical V0.4 validation failed"):
+                repair_file(path, manifest)
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_changed_repair_validates_non_targeted_rows_before_write(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "records.jsonl"
+            manifest = Path(directory) / "manifest.json"
+            target = copy.deepcopy(FIXTURE)
+            unrelated = copy.deepcopy(FIXTURE)
+            unrelated["id"] = "unrelated"
+            unrelated["sentence"] = ""
+            path.write_text(json.dumps(target) + "\n" + json.dumps(unrelated) + "\n")
+            manifest.write_text(json.dumps({"records": [{"id": target["id"], "source_version": "0.4"}]}))
+            before = path.read_bytes()
+
+            with self.assertRaisesRegex(ValueError, "canonical V0.4 validation failed"):
+                repair_file(path, manifest)
+            self.assertEqual(path.read_bytes(), before)
 
     def test_ambiguous_duplicate_lemma_or_form_does_not_choose_first_or_last(self) -> None:
         cases = (("lemma", "catalogue"), ("form", "catalogued"))

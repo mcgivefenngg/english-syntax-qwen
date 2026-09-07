@@ -207,8 +207,12 @@ rejected. Structural fields are mapped only when their source meaning is
 unique; geometry never infers `shared_subject_projection`, and ambiguous
 relations become `other` plus review requirement. Existing review metadata is
 not overwritten. Fixture-specific repairs require a strict manifest of exact
-record ids/source versions (and optional hashes), reject reviewed/approved
-records, and are repeat-safe.
+record ids/source versions (and optional source hashes), reject reviewed/approved
+records, and are repeat-safe. A repaired record carries a deterministic
+`migration_metadata.repair_output_hash` over canonical JSON with that hash
+field excluded; this output fingerprint is distinct from the manifest's
+pre-repair `source_hash` and is checked on later no-op runs. A manifest may
+also provide `repair_output_hash` as the expected repaired-output fingerprint.
 
 Migration and fixture repair do not infer scoped evidence from global field or
 collection presence. Missing evidence remains unannotated and

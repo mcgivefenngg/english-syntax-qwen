@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -37,6 +38,38 @@ except ImportError:
 ROOT = Path(__file__).resolve().parents[1]
 TARGET_SCHEMA_VERSION = "0.4"
 REPAIR_VERSION = "0.4.0"
+REPAIR_OUTPUT_HASH_FIELD = "repair_output_hash"
+PROTECTED_REVIEW_STATUSES = frozenset(
+    {"linguistically_reviewed", "approved_for_training", "canonical_gold"}
+)
+
+
+def _canonical_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _canonical_hash(value: Any) -> str:
+    return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def _repair_output_hash_input(record: dict[str, Any]) -> dict[str, Any]:
+    value = copy.deepcopy(record)
+    metadata = value.get("migration_metadata")
+    if isinstance(metadata, dict):
+        metadata.pop(REPAIR_OUTPUT_HASH_FIELD, None)
+    return value
+
+
+def _repair_output_hash(record: dict[str, Any]) -> str:
+    """Hash repaired output without making the hash field self-referential."""
+    return _canonical_hash(_repair_output_hash_input(record))
+
+
+def assert_fixture_repair_allowed(record: dict[str, Any]) -> None:
+    metadata = record.get("review_metadata")
+    status = metadata.get("review_status") if isinstance(metadata, dict) else None
+    if status in PROTECTED_REVIEW_STATUSES:
+        raise ValueError(f"{record.get('id')}: refusing repair of reviewed/approved record")
 
 
 def _unresolved_candidate(form: str) -> dict[str, Any] | None:
@@ -67,7 +100,7 @@ def _unresolved_candidate(form: str) -> dict[str, Any] | None:
     }
 
 
-def repair_record(record: dict[str, Any]) -> dict[str, Any]:
+def _repair_record_unchecked(record: dict[str, Any]) -> dict[str, Any]:
     for word in record.get("words", []):
         if not isinstance(word, dict):
             continue
@@ -223,7 +256,7 @@ def repair_record(record: dict[str, Any]) -> dict[str, Any]:
         migration_metadata["fixture_repair_version"] = REPAIR_VERSION
     if review_required:
         sensitive = True
-        if metadata.get("review_status") not in {"linguistically_reviewed", "approved_for_training", "canonical_gold"}:
+        if metadata.get("review_status") not in PROTECTED_REVIEW_STATUSES:
             metadata["review_status"] = "review_required"
         record["migration_review_required"] = True
         record["migration_note"] = "Legacy coverage or collection ownership lacked a unique deterministic V0.4 mapping; human review is required."
@@ -231,6 +264,11 @@ def repair_record(record: dict[str, Any]) -> dict[str, Any]:
         metadata["review_status"] = "review_required"
     record["schema_version"] = TARGET_SCHEMA_VERSION
     return record
+
+
+def repair_record(record: dict[str, Any]) -> dict[str, Any]:
+    assert_fixture_repair_allowed(record)
+    return _repair_record_unchecked(record)
 
 
 def _load_manifest(path: Path) -> dict[str, dict[str, Any]]:
@@ -262,9 +300,7 @@ def repair_file(path: Path, manifest_path: Path | None = None) -> None:
                 if entry is None:
                     rows.append(record)
                     continue
-                metadata = record.get("review_metadata") if isinstance(record.get("review_metadata"), dict) else {}
-                if metadata.get("review_status") in {"linguistically_reviewed", "approved_for_training", "canonical_gold"}:
-                    raise ValueError(f"{record.get('id')}: refusing repair of reviewed/approved record")
+                assert_fixture_repair_allowed(record)
                 already_repaired = (
                     record.get("schema_version") == TARGET_SCHEMA_VERSION
                     and isinstance(record.get("migration_metadata"), dict)
@@ -273,28 +309,43 @@ def repair_file(path: Path, manifest_path: Path | None = None) -> None:
                 if record.get("schema_version") != entry["source_version"] and not already_repaired:
                     raise ValueError(f"{record.get('id')}: manifest source_version mismatch")
                 if already_repaired:
+                    actual_hash = _repair_output_hash(record)
+                    stored_hash = record.get("migration_metadata", {}).get(REPAIR_OUTPUT_HASH_FIELD)
+                    expected_hash = entry.get(REPAIR_OUTPUT_HASH_FIELD)
+                    if stored_hash is None and expected_hash is None:
+                        raise ValueError(f"{record.get('id')}: repaired output hash is required")
+                    if stored_hash is not None and (not isinstance(stored_hash, str) or stored_hash != actual_hash):
+                        raise ValueError(f"{record.get('id')}: repaired output hash mismatch")
+                    if expected_hash is not None and expected_hash != actual_hash:
+                        raise ValueError(f"{record.get('id')}: manifest repaired output hash mismatch")
                     rows.append(record)
                     continue
                 expected_hash = entry.get("source_hash")
                 if expected_hash:
-                    import hashlib
-                    actual_hash = hashlib.sha256(json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+                    actual_hash = _canonical_hash(record)
                     if actual_hash != expected_hash:
                         raise ValueError(f"{record.get('id')}: source hash mismatch")
-                before = json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                before = _canonical_json(record)
                 repaired = repair_record(record)
-                after = json.dumps(repaired, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                repaired.setdefault("migration_metadata", {})[REPAIR_OUTPUT_HASH_FIELD] = _repair_output_hash(repaired)
+                expected_output_hash = entry.get(REPAIR_OUTPUT_HASH_FIELD)
+                if expected_output_hash is not None and expected_output_hash != repaired["migration_metadata"][REPAIR_OUTPUT_HASH_FIELD]:
+                    raise ValueError(f"{record.get('id')}: manifest repaired output hash mismatch")
+                after = _canonical_json(repaired)
                 changed = changed or before != after
                 rows.append(repaired)
     unknown = set(manifest) - {str(row.get("id")) for row in rows}
     if unknown:
         raise ValueError(f"manifest IDs missing from input: {sorted(unknown)}")
-    if changed:
-        for row_number, row in enumerate(rows, 1):
+    for row_number, row in enumerate(rows, 1):
+        must_validate = changed or str(row.get("id")) in manifest
+        if must_validate:
             validate_canonical_record(row, f"{path}:{row_number}")
+    must_write = changed
+    if must_write:
         with path.open("w", encoding="utf-8") as handle:
             for row in rows:
-                handle.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
+                handle.write(_canonical_json(row) + "\n")
 
 
 if __name__ == "__main__":
