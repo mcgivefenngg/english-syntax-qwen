@@ -21,6 +21,11 @@ try:
 except ImportError:
     from scripts.authoritative_payload import AuthoritativePayload, AuthoritativePayloadState, authoritative_payload, authoritative_payload_state
 
+try:
+    from canonical_safety import canonical_record_safety_issues
+except ImportError:
+    from scripts.canonical_safety import canonical_record_safety_issues
+
 
 class CoverageState(str, Enum):
     COMPLETE = "complete"
@@ -311,7 +316,12 @@ def _dimension_entry_issue(
     return None
 
 
-def coverage_declaration_issues(record: dict[str, Any], dimension: str | None = None) -> list[CoverageIssue]:
+def coverage_declaration_issues(
+    record: dict[str, Any],
+    dimension: str | None = None,
+    *,
+    include_content: bool = True,
+) -> list[CoverageIssue]:
     """Return shared H2 declaration/content issues for validation and resolution."""
     annotation_scope = record.get("annotation_scope")
     dimensions = annotation_scope.get("dimensions", []) if isinstance(annotation_scope, dict) else []
@@ -325,7 +335,11 @@ def coverage_declaration_issues(record: dict[str, Any], dimension: str | None = 
     exact_scopes: dict[tuple[str, tuple[Any, ...]], tuple[int, dict[str, Any]]] = {}
     requested_dimension = dimension
     for index, entry in enumerate(dimensions):
-        if not isinstance(entry, dict) or not isinstance(entry.get("dimension"), str):
+        if not isinstance(entry, dict):
+            issues.append(CoverageIssue(index, "coverage dimension must be an object"))
+            continue
+        if not isinstance(entry.get("dimension"), str):
+            issues.append(CoverageIssue(index, "coverage dimension requires a string dimension"))
             continue
         entry_dimension = entry["dimension"]
         if requested_dimension is not None and requested_dimension != entry_dimension:
@@ -366,7 +380,8 @@ def coverage_declaration_issues(record: dict[str, Any], dimension: str | None = 
                         right_index,
                         f"overlapping peer regions have contradictory coverage states (peer declaration at index {left_index})",
                     ))
-    issues.extend(_collection_content_issues(record, valid_entries))
+    if include_content:
+        issues.extend(_collection_content_issues(record, valid_entries))
     return issues
 
 
@@ -392,7 +407,7 @@ def declared_coverage_state(
     dimension: str,
     target: str | dict[str, Any] | None = None,
 ) -> CoverageState:
-    """Resolve declaration precedence without validating payload content."""
+    """Resolve raw declaration precedence without canonical or payload validation."""
     if dimension_spec(dimension) is None:
         raise CoverageResolutionError(f"unknown coverage dimension {dimension!r}")
     target_validation = validate_coverage_target(record, dimension, target)
@@ -457,13 +472,18 @@ def resolve_coverage(
     target: str | dict[str, Any] | None = None,
 ) -> CoverageState:
     """Resolve by exact node, containment-minimal region, then record scope."""
-    if not isinstance(record, dict):
-        raise CoverageResolutionError("coverage record must be an object")
+    safety_issues = canonical_record_safety_issues(record)
+    if safety_issues:
+        raise CoverageResolutionError(safety_issues[0])
     if dimension_spec(dimension) is None:
         raise CoverageResolutionError(f"unknown coverage dimension {dimension!r}")
     identity_issues = _record_identity_issues(record)
     if identity_issues:
         raise CoverageResolutionError(identity_issues[0])
+    issues = coverage_declaration_issues(record, include_content=False)
+    if issues:
+        issue = issues[0]
+        raise CoverageResolutionError(f"{issue.message} (declaration index {issue.index})")
     issues = coverage_declaration_issues(record, dimension)
     if issues:
         issue = issues[0]

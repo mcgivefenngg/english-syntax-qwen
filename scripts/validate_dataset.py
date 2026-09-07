@@ -59,12 +59,13 @@ try:
 except ImportError:
     from scripts.collection_contract import normalize_predicate_reference, predicate_reference_issue
 
+try:
+    from canonical_safety import CANONICAL_REQUIRED_FIELDS
+except ImportError:
+    from scripts.canonical_safety import CANONICAL_REQUIRED_FIELDS
 
-REQUIRED = {
-    "schema_version", "id", "sentence", "capability_tags", "difficulty", "source_type",
-    "framework", "sentence_type", "annotation_scope", "clauses", "constituents", "words", "dependencies",
-    "explanation", "split",
-}
+
+REQUIRED = CANONICAL_REQUIRED_FIELDS
 ANALYSIS_LEVELS = {"lexical_category", "phrase_category", "syntactic_function", "clause_structure", "framework", "semantic_role", "span", "none"}
 FRAMEWORK_SENSITIVE_ANALYSIS_TYPES = {"ecm", "small_clause", "ud_pos", "ptb_pos", "gerund_as_noun", "control", "raising", "perception", "perception_construction"}
 REVIEW_STATUSES = {"schema_migrated", "structurally_validated", "review_required", "linguistically_reviewed", "approved_for_training", "canonical_gold"}

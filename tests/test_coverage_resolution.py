@@ -58,6 +58,32 @@ def add_overlap_target(record: dict[str, Any]) -> None:
 
 
 class CoverageResolutionTests(unittest.TestCase):
+    def test_valid_canonical_record_resolves_exact_node_and_record_scope(self) -> None:
+        record = with_dimensions(
+            declaration({"kind": "record"}, "complete", dimension="lexical_category"),
+            declaration({"kind": "node", "node": "w0"}, "complete", dimension="lexical_category"),
+        )
+        self.assertIs(resolve_coverage(record, "lexical_category", "w0"), CoverageState.COMPLETE)
+        self.assertIs(resolve_coverage(record, "lexical_category"), CoverageState.COMPLETE)
+
+    def test_canonical_safety_fail_closed_for_record_level_mutations(self) -> None:
+        mutations = {
+            "missing annotation scope coverage": lambda record: record["annotation_scope"].pop("coverage"),
+            "invalid annotation scope coverage": lambda record: record["annotation_scope"].__setitem__("coverage", "bogus"),
+            "malformed annotation scope dimension": lambda record: record["annotation_scope"]["dimensions"].append(None),
+            "invalid canonical record id": lambda record: record.__setitem__("id", "not a valid id!"),
+            "missing required canonical field": lambda record: record.pop("dependencies"),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                record = with_dimensions(declaration({"kind": "node", "node": "w0"}, "complete", dimension="lexical_category"))
+                mutate(record)
+                with self.assertRaises(CoverageResolutionError):
+                    resolve_coverage(record, "lexical_category", "w0")
+                decision = resolve_scoring_eligibility(record, "lexical_category", "w0")
+                self.assertFalse(decision.scoreable)
+                self.assertIsNone(decision.coverage_state)
+
     def test_record_scope_only_resolves_deterministically(self) -> None:
         record = with_dimensions(declaration({"kind": "record"}, "complete"))
         self.assertIs(resolve_coverage(record, DIMENSION, "subj"), CoverageState.COMPLETE)
