@@ -410,6 +410,111 @@ class MigrationSafetyTests(unittest.TestCase):
                 repair_file(path, manifest)
             self.assertEqual(path.read_bytes(), before)
 
+    def test_duplicate_manifest_covered_input_ids_are_rejected(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["id"] = "duplicate-id"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "records.jsonl"
+            manifest = Path(directory) / "manifest.json"
+            path.write_text(json.dumps(record) + "\n" + json.dumps(record) + "\n")
+            manifest.write_text(json.dumps({"records": [{"id": "duplicate-id", "source_version": "0.4"}]}))
+            before = path.read_bytes()
+            with self.assertRaisesRegex(ValueError, "duplicate record id 'duplicate-id'"):
+                repair_file(path, manifest)
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_one_manifest_entry_cannot_authorize_two_input_rows(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["id"] = "duplicate-id"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "records.jsonl"
+            manifest = Path(directory) / "manifest.json"
+            path.write_text(json.dumps(record) + "\n" + json.dumps(record) + "\n")
+            manifest.write_text(json.dumps({"records": [{"id": "duplicate-id", "source_version": "0.4"}]}))
+            before = path.read_bytes()
+            with self.assertRaises(ValueError):
+                repair_file(path, manifest)
+            self.assertEqual(path.read_bytes(), before)
+            rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+            self.assertTrue(all("repair_output_hash" not in row.get("migration_metadata", {}) for row in rows))
+
+    def test_duplicate_input_ids_outside_manifest_are_rejected(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["id"] = "duplicate-id"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "records.jsonl"
+            manifest = Path(directory) / "manifest.json"
+            path.write_text(json.dumps(record) + "\n" + json.dumps(record) + "\n")
+            manifest.write_text(json.dumps({"records": []}))
+            before = path.read_bytes()
+            with self.assertRaisesRegex(ValueError, "duplicate record id 'duplicate-id'"):
+                repair_file(path, manifest)
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_duplicate_already_repaired_input_rows_are_rejected(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "records.jsonl"
+            manifest = Path(directory) / "manifest.json"
+            path.write_text(json.dumps(record) + "\n")
+            manifest.write_text(json.dumps({"records": [{"id": record["id"], "source_version": "0.4"}]}))
+            repair_file(path, manifest)
+            repaired_line = path.read_text()
+            path.write_text(repaired_line + repaired_line)
+            before = path.read_bytes()
+            with self.assertRaisesRegex(ValueError, f"duplicate record id {record['id']!r}"):
+                repair_file(path, manifest)
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_unique_multi_row_input_still_repairs(self) -> None:
+        first = copy.deepcopy(FIXTURE)
+        second = copy.deepcopy(FIXTURE)
+        second["id"] = "fixture-second"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "records.jsonl"
+            manifest = Path(directory) / "manifest.json"
+            path.write_text(json.dumps(first) + "\n" + json.dumps(second) + "\n")
+            manifest.write_text(json.dumps({"records": [
+                {"id": first["id"], "source_version": "0.4"},
+                {"id": second["id"], "source_version": "0.4"},
+            ]}))
+            repair_file(path, manifest)
+            rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+            self.assertEqual([row["id"] for row in rows], [first["id"], second["id"]])
+            for row in rows:
+                self.assertEqual(row["migration_metadata"]["fixture_repair_version"], "0.4.0")
+                self.assertIn("repair_output_hash", row["migration_metadata"])
+
+    def test_duplicate_manifest_ids_rejection_is_unchanged(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "records.jsonl"
+            manifest = Path(directory) / "manifest.json"
+            path.write_text(json.dumps(record) + "\n")
+            manifest.write_text(json.dumps({"records": [
+                {"id": record["id"], "source_version": "0.4"},
+                {"id": record["id"], "source_version": "0.4"},
+            ]}))
+            before = path.read_bytes()
+            with self.assertRaisesRegex(ValueError, "repair manifest contains duplicate id"):
+                repair_file(path, manifest)
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_manifest_ids_missing_from_input_rejection_is_unchanged(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "records.jsonl"
+            manifest = Path(directory) / "manifest.json"
+            path.write_text(json.dumps(record) + "\n")
+            manifest.write_text(json.dumps({"records": [
+                {"id": record["id"], "source_version": "0.4"},
+                {"id": "absent-record", "source_version": "0.4"},
+            ]}))
+            before = path.read_bytes()
+            with self.assertRaisesRegex(ValueError, r"manifest IDs missing from input: \['absent-record'\]"):
+                repair_file(path, manifest)
+            self.assertEqual(path.read_bytes(), before)
+
     def test_ambiguous_duplicate_lemma_or_form_does_not_choose_first_or_last(self) -> None:
         cases = (("lemma", "catalogue"), ("form", "catalogued"))
         for field, reference in cases:

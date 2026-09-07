@@ -292,11 +292,19 @@ def repair_file(path: Path, manifest_path: Path | None = None) -> None:
     manifest = _load_manifest(manifest_path)
     rows = []
     changed = False
+    seen_input_ids: set[str] = set()
     with path.open(encoding="utf-8") as handle:
-        for line in handle:
+        for line_number, line in enumerate(handle, 1):
             if line.strip():
                 record = json.loads(line)
-                entry = manifest.get(record.get("id"))
+                identifier = record.get("id")
+                if isinstance(identifier, str):
+                    if identifier in seen_input_ids:
+                        raise ValueError(
+                            f"input contains duplicate record id {identifier!r} at line {line_number}"
+                        )
+                    seen_input_ids.add(identifier)
+                entry = manifest.get(identifier)
                 if entry is None:
                     rows.append(record)
                     continue
