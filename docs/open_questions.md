@@ -5,20 +5,20 @@ The V0.4 representation and validator boundaries are in
 linguistic adjudication: records can be structurally valid while remaining
 `review_required`.
 
-## Resolved in V0.2
+## Resolved representation decisions
 
-1. **Infinitival `to` POS.** Resolved by Decision 1 and Decision 12: canonical `lexical_category` is `subordinator`; UD/PTB and pedagogical labels are tagged mappings or aliases.
-2. **Clause as constituent.** Resolved by Decision 2 and V0.4: `node_kind` separates clause and phrase; `Clause` is not a phrase category.
-3. **Predicands.** Resolved by Decision 4: use structured predicand kinds and do not invent overt matrix references for discourse-inferred cases.
-4. **PP attachment ambiguity.** Resolved by Decision 5: use calibrated ambiguity statuses and reward both established structures and interpretations.
-5. **Gerund-participial terminology.** Resolved by Decision 6: canonical modern label is gerund-participial; traditional labels are framework-marked aliases.
-6. **Lexical-substitution contamination.** Resolved by Decision 9: retain lexical checks and add conservative, auditable construction signatures.
-7. **Pedagogical terminology.** Resolved by Decision 10: keep canonical analysis, the single `alternative_analyses[]` channel, and learner aliases in separate layers. Historical alternative fields are display/provenance metadata only.
+1. **Infinitival `to` POS.** The canonical `lexical_category` is `subordinator`; UD/PTB and pedagogical labels are tagset-qualified mappings or framework-marked aliases.
+2. **Clause as constituent.** `node_kind` separates clause and phrase; `Clause` is not a phrase category.
+3. **Predicands.** Use structured predicand kinds and do not invent overt matrix references for discourse-inferred cases.
+4. **PP attachment ambiguity.** Use calibrated ambiguity statuses and record the established structures and interpretations required by the applicable status.
+5. **Gerund-participial terminology.** The canonical modern label is gerund-participial; traditional labels are framework-marked aliases.
+6. **Lexical-substitution contamination.** Retain lexical checks and add conservative, auditable construction signatures.
+7. **Pedagogical terminology.** Keep canonical analysis, the single `alternative_analyses[]` channel, and learner aliases in separate layers. Historical alternative fields are display/provenance metadata only.
 
-## Additional V0.2 decisions
+## Additional current representation decisions
 
-8. **Sentence type versus clause ontology.** Resolved by Decision 11: clause mood and optional `simple`/`compound`/`complex` pedagogical classification do not constrain non-finite or subordinate clauses.
-9. **POS versus lexical category.** Resolved by Decision 12: canonical lexical category and tagset-qualified external POS mappings are separate fields.
+8. **Sentence type versus clause ontology.** Clause mood and optional `simple`/`compound`/`complex` pedagogical classification do not constrain non-finite or subordinate clauses.
+9. **POS versus lexical category.** Canonical lexical category and tagset-qualified external POS mappings are separate fields.
 
 ## Still open
 

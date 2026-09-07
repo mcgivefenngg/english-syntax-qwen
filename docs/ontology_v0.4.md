@@ -36,7 +36,8 @@ Lexical uncertainty is explicit. A candidate has a category plus a namespace
 (`category_namespace` or an established `framework`), and may carry a status.
 External POS mappings are a separate `external_pos_tags` layer. Items such as
 relative *that*, *for*, and copular *be* may remain unresolved without a fake
-project-canonical category.
+project-canonical category. Infinitival *to* uses `subordinator` as its
+canonical lexical category; tagset-specific labels remain external mappings.
 
 ## Clause axes and realization
 

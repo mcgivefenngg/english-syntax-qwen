@@ -34,6 +34,7 @@
 - `docs/annotation_guidelines.md`：标注单位、字段边界、审核流程和实践例子。
 - `docs/open_questions.md`：仍待人工裁决的问题清单。
 - `docs/capability_taxonomy.md`：稳定 capability tags 及其 coverage 含义。
+- `docs/archive/`：历史 provenance only；fresh development/review 不得将其中内容作为当前 authority，仅可在 migration/history/provenance task 中查阅。
 - `schemas/gold_annotation.schema.json`：canonical JSON wire contract。
 - `schemas/rendered_sft_target.schema.json`：渲染后 linguistic projection contract。
 - `scripts/validate_dataset.py`：schema、结构、ontology、coverage、metadata、split isolation 验证。

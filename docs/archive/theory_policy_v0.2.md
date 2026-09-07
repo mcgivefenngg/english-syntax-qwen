@@ -1,11 +1,15 @@
 # English Syntax Tutor V0.2 Theory Policy
 
-> V0.4 note: [`ontology_v0.4.md`](ontology_v0.4.md) is authoritative for the
-> canonical framework boundary, clause dimensions, coverage contract, and
-> token/span convention. The V0.2 decisions below remain historical guidance
-> where V0.4 does not supersede them.
+> **ARCHIVED HISTORICAL DOCUMENT — NOT CURRENT AUTHORITY.** This file is retained
+> for provenance and migration history only. Current V0.4 work is governed by
+> [`../ontology_v0.4.md`](../ontology_v0.4.md),
+> [`../annotation_guidelines.md`](../annotation_guidelines.md),
+> [`../open_questions.md`](../open_questions.md), and repository-root
+> [`../../AGENTS.md`](../../AGENTS.md). Do not use this document as a fallback
+> when current V0.4 documentation is silent. When the archived text conflicts
+> with current V0.4 sources, current V0.4 sources win.
 
-Status: authoritative for V0.2 annotation and data validation. The canonical framework is **CGEL-inspired modern descriptive English syntax**. “Inspired” is intentional: records may compare traditional pedagogical grammar, Universal Dependencies (UD), Penn Treebank (PTB), generative terminology, or another established modern analysis when the framework is named. A framework alternative never silently changes the canonical analysis.
+Historical status: this policy was authoritative only for V0.2 annotation and data validation. The canonical framework was **CGEL-inspired modern descriptive English syntax**. “Inspired” was intentional: records could compare traditional pedagogical grammar, Universal Dependencies (UD), Penn Treebank (PTB), generative terminology, or another established modern analysis when the framework was named. A framework alternative never silently changed the canonical analysis.
 
 ## Cross-cutting invariants
 
@@ -209,4 +213,4 @@ Status: authoritative for V0.2 annotation and data validation. The canonical fra
 
 ## Review boundary
 
-This policy does not re-review the 50 held-out benchmark analyses. Benchmark records remain evaluation-only and are changed only as needed for schema compatibility. Questions requiring a new theoretical decision must be added to `docs/open_questions.md` rather than guessed by the pipeline.
+This policy does not re-review the 50 held-out benchmark analyses. Benchmark records remain evaluation-only and are changed only as needed for schema compatibility. Questions requiring a new theoretical decision belong in the current [`../open_questions.md`](../open_questions.md) rather than being guessed by the pipeline.

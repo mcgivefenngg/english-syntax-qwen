@@ -1,5 +1,12 @@
 # English Syntax Tutor V0.3.1 legacy foundational ontology
 
+> **ARCHIVED HISTORICAL DOCUMENT — NOT CURRENT AUTHORITY.** This file is retained
+> for provenance and migration history only. Use the current V0.4 contract in
+> [`../ontology_v0.4.md`](../ontology_v0.4.md), practical guidance in
+> [`../annotation_guidelines.md`](../annotation_guidelines.md), and unresolved
+> question status in [`../open_questions.md`](../open_questions.md). Do not use
+> this document as a fallback when current V0.4 documentation is silent.
+
 V0.3.1 was a superseded contract correction release. It does not add linguistic gold and
 does not adjudicate relative **that**, for-to **for**, copular **be**, control,
 raising, ECM, perception, small clauses, coordination heads, fused relatives,

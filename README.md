@@ -193,7 +193,7 @@ uv run python scripts/train_sft.py \
   --output-dir outputs/qwen3.5-4b-english-syntax-lora
 ```
 
-The script uses `load_in_4bit=False`, `bf16=True`, language-only LoRA modules, Unsloth gradient checkpointing, and the official `UnslothVisionDataCollator`. Before importing model libraries it rejects `schema_migrated`, `review_required`, `structurally_validated`, and `benchmark` inputs; only human-approved linguistic review states are accepted by default. `--development-mode` is an explicit debug escape hatch and is never the normal training path. It also refuses to start without CUDA/BF16. No training is run as part of environment setup.
+The script uses `load_in_4bit=False`, `bf16=True`, language-only LoRA modules, Unsloth gradient checkpointing, and the official `UnslothVisionDataCollator`. Before importing model libraries it rejects `schema_migrated`, `review_required`, `structurally_validated`, and `benchmark` inputs; normal SFT requires explicit `approved_for_training` or `canonical_gold` approval under the current V0.4 content gate. `--development-mode` is an explicit debug escape hatch and is never the normal training path. It also refuses to start without CUDA/BF16. No training is run as part of environment setup.
 
 ## Merge, convert, and quantize
 

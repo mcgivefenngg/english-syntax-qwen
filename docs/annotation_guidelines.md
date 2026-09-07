@@ -1,6 +1,6 @@
 # English Syntax Tutor V0.4 annotation guidelines
 
-The authoritative V0.4 ontology is in [`ontology_v0.4.md`](ontology_v0.4.md). Earlier theory decisions remain in [`theory_policy_v0.2.md`](theory_policy_v0.2.md) only where they are not superseded.
+The current V0.4 foundational contract is in [`ontology_v0.4.md`](ontology_v0.4.md). Archived V0.2/V0.3 documents are historical provenance only and are not fallback authority for annotation. When a question remains unresolved, follow [`open_questions.md`](open_questions.md) and preserve its review-required status.
 
 V0.4 is a breaking foundational wire-contract correction, not a new linguistic-gold
 release. Do not mark unresolved lexical items or benchmark records
@@ -26,7 +26,7 @@ Use optional `heads`, `complements`, and `adjuncts` lists when a compact index i
 
 Keep these dimensions independent in every annotation:
 
-* **Lexical category** is the word-level class: noun, verb, adjective, adverb, preposition, **determinative**, pronoun, coordinator, subordinator, auxiliary, modal, particle, numeral, interjection, or punctuation. The `words[].lexical_category` field records it; V0.4 external mappings belong in `words[].external_pos_tags` as `{tagset, tag}` objects. `words[].pos` is migration-only. The syntactic function is `determiner`, never a lexical-category value. Relative `that`, for-to `for`, and copular `be` use a namespaced unresolved candidate object until review.
+* **Lexical category** is the word-level class: noun, verb, adjective, adverb, preposition, **determinative**, pronoun, coordinator, subordinator, auxiliary, modal, particle, numeral, interjection, or punctuation. The `words[].lexical_category` field records it; infinitival *to* uses `subordinator` in the canonical layer. V0.4 external mappings belong in `words[].external_pos_tags` as `{tagset, tag}` objects. `words[].pos` is migration-only. The syntactic function is `determiner`, never a lexical-category value. Relative `that`, for-to `for`, and copular `be` use a namespaced unresolved candidate object until review.
 * **Phrase category** is the category of a phrase constituent: `NP`, `VP`, `PP`, `AdjP`, `AdvP`, and so on. It is recorded in `constituents[].phrase_category` when `node_kind: "phrase"`.
 * **Clause ontology** is split across `clauses[].finiteness`, `clause_form`, `clause_construction`, and composable `integration` relations; a clause-valued constituent uses `clause_ref`, an external `function`, and an explicit `realization` relation.
 * **Syntactic function** is the job performed in a larger construction: subject, object, selected complement, adjunct, predicative complement, relative modifier, etc. It is recorded in `constituents[].function`; a clause node has no authoritative function.
@@ -61,19 +61,32 @@ record, with framework-sensitive details explicitly attributed.
 The examples below preserve legacy task evidence only. V0.4 does not make
 these analyses canonical; use typed framework analyses and
 `review_status: "review_required"` until independent adjudication.
+The descriptions below are not current project adjudications and must not be
+promoted into canonical truth without the review recorded in
+[`open_questions.md`](open_questions.md).
 
-Record the embedded clause and understood-subject relation explicitly.
-
-* **I saw him leave the building** contains a bare infinitival complement; *him* is the understood subject of *leave*. The traditional “Object + Object Complement” analysis is an established alternative where relevant.
-* **I saw him leaving the building** contains a gerund-participial complement, with the same understood-subject relation.
-* **I want him to finish** is object control: *him* is object of *want* and understood subject of the infinitival clause. **I persuaded him to finish** is also control, but with a different lexical frame.
-* **He seems to understand** is raising: *he* is not a semantic argument of *seem* and is raised from the infinitival subject position. **I expect him to finish** is ECM (exceptional case marking), not subject control.
-
-Do not collapse these constructions because all contain `to` or an NP plus a non-finite verb.
+Record the embedded clause and any proposed understood-subject relation
+explicitly, but attribute the analysis to its framework and retain
+`review_status: "review_required"`. The historical task evidence contrasts
+bare-infinitival and gerund-participial complements in **I saw him leave the
+building** and **I saw him leaving the building**, and contrasts proposed
+control, raising, and ECM analyses in **I want him to finish**, **I persuaded
+him to finish**, **He seems to understand**, and **I expect him to finish**.
+These descriptions are evidence for future adjudication, not V0.4 canonical
+conclusions. Do not collapse or promote them merely because they contain `to`
+or an NP plus a non-finite verb.
 
 ## Predication, attachment, and coordination
 
-Distinguish subject and object predicative complements from ordinary objects or adjuncts: **The committee found the proposal impractical** has an object-predicative complement `impractical`. Record secondary predication when an adjunct predicates of an NP, as in **The children arrived exhausted**. For PPs, annotate plausible attachment alternatives only when the syntax genuinely supports them; state a preferred reading and the evidence. Coordination should represent conjuncts and coordinator relations, not treat the coordinator as a head NP.
+Keep proposed subject/object predication, secondary-predication, and
+coordination analyses framework-attributed and `review_required`; V0.4 does not
+adjudicate these construction-level questions. The historical task evidence
+uses **The committee found the proposal impractical** and **The children
+arrived exhausted** as contrastive examples, and uses coordination examples to
+test competing head analyses. For PPs, annotate plausible attachment
+alternatives only when the syntax genuinely supports them; state a preferred
+reading and the evidence without treating a semantic role as proof of
+attachment.
 
 ## Minimal pairs and error diagnosis
 
@@ -83,4 +96,4 @@ An `error_diagnosis` object stores the student's/model's claim and one or more d
 
 ## Review checklist
 
-Before accepting an example, check token spans, unique IDs, lexical/phrase/function separation, `finiteness`/`clause_form`/`clause_construction`/`integration`, scoped coverage metadata, node kinds, external POS tagsets, head/dependency/predicand/fusion references, framework status, ambiguity calibration, construction signatures, review metadata, and split. Use `review_status: "review_required"` when a structural boundary cannot be repaired without a linguistic decision. Run `.venv/bin/python scripts/validate_dataset.py <files> --benchmark eval/benchmark_v1.jsonl` and `.venv/bin/python scripts/check_contamination.py <train-or-generated-files> --benchmark eval/benchmark_v1.jsonl` before publishing. The validator executes the Draft 2020-12 JSON Schema engine, checks sentence/words alignment and reference types, and sends every benchmark row through the same full record validation. Rendered assistant content is parsed as JSON and validated as a linguistic projection. These are machine-structural guarantees, not linguistic adjudication; a structurally valid benchmark record is not automatically approved for training or `canonical_gold`. V0.1/V0.2 records remain readable for migration; new records should use `schema_version: "0.4"`, `annotation_scope`, typed `canonical_analysis`, `node_kind`, `phrase_category`, the orthogonal clause fields, and `external_pos_tags`.
+Before accepting an example, check token spans, unique IDs, lexical/phrase/function separation, `finiteness`/`clause_form`/`clause_construction`/`integration`, scoped coverage metadata, node kinds, external POS tagsets, head/dependency/predicand/fusion references, framework status, ambiguity calibration, construction signatures, review metadata, and split. Use `review_status: "review_required"` when a structural boundary cannot be repaired without a linguistic decision. Run `.venv/bin/python scripts/validate_dataset.py <files> --benchmark eval/benchmark_v1.jsonl` and `.venv/bin/python scripts/check_contamination.py <train-or-generated-files> --benchmark eval/benchmark_v1.jsonl` before publishing. The validator executes the Draft 2020-12 JSON Schema engine, checks sentence/words alignment and reference types, and sends every benchmark row through the same full record validation. Rendered assistant content is parsed as JSON and validated as a linguistic projection. These are machine-structural guarantees, not linguistic adjudication; a structurally valid benchmark record is not automatically approved for training or `canonical_gold`. V0.1/V0.2 records remain readable as migration inputs, but their historical policy is not current authority; new records should use `schema_version: "0.4"`, `annotation_scope`, typed `canonical_analysis`, `node_kind`, `phrase_category`, the orthogonal clause fields, and `external_pos_tags`.
