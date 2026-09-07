@@ -16,3 +16,5 @@ python3 scripts/validate_dataset.py data/gold --no-benchmark
 
 echo "== Git diff check =="
 git diff --check
+
+echo "PRE-FLIGHT PASS"

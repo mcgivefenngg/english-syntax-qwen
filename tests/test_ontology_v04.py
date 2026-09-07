@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import copy
 import json
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -17,6 +16,7 @@ from scripts.validate_dataset import coverage_allows_score, validate_record
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = read_jsonl(ROOT / "data" / "gold" / "fixtures.jsonl")[0][1]
+LEGACY_V02_FIXTURE = ROOT / "tests" / "fixtures" / "legacy_v02_fixture.json"
 
 
 class OntologyV04Tests(unittest.TestCase):
@@ -30,8 +30,7 @@ class OntologyV04Tests(unittest.TestCase):
         self.assertTrue(any("schema_version" in error for error in validate_record(old, "legacy")))
 
     def test_real_v02_fixture_migrates_to_v04(self) -> None:
-        output = subprocess.check_output(["git", "show", "v0.2.1:data/gold/fixtures.jsonl"], cwd=ROOT, text=True)
-        source = json.loads(output.splitlines()[0])
+        source = json.loads(LEGACY_V02_FIXTURE.read_text(encoding="utf-8"))
         self.assertEqual(source["schema_version"], "0.2")
         migrate(source)
         self.assertEqual(source["schema_version"], "0.4")
