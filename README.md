@@ -254,6 +254,14 @@ Run checks before publishing a split:
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
+For the lightweight CPU verification path used before commits and by GitHub Actions, run:
+
+```bash
+./scripts/preflight.sh
+```
+
+The preflight runs the full unittest suite, Python compilation, canonical validation of `data/gold` only, and `git diff --check`. Its CI-only third-party dependency closure is pinned in `requirements-ci.txt`; it does not install the training stack or validate the held-out benchmark.
+
 `validate_dataset.py` executes the Draft 2020-12 JSON Schema validator for every canonical and benchmark record, then performs deterministic token alignment, span/reference/type, ontology, coverage, metadata, and split-isolation checks. The benchmark is sent through the same full `validate_record` path; one structural failure returns non-zero. Rendered assistant content is required to be valid JSON and is validated as a V0.4 linguistic projection using [`schemas/rendered_sft_target.schema.json`](schemas/rendered_sft_target.schema.json). These guarantees are structural only: passing schema/structural validation is not equivalent to linguistic adjudication, training approval, or `canonical_gold` status. `check_contamination.py` adds exact, case/punctuation-normalized, embedded, lexical-overlap, sequence, token-edit-distance, simple lexical-substitution skeleton, and ID-independent construction-frame checks. See [`docs/ontology_v0.4.md`](docs/ontology_v0.4.md) for the foundational ontology, [`docs/capability_taxonomy.md`](docs/capability_taxonomy.md) for tag semantics, and [`docs/open_questions.md`](docs/open_questions.md) for questions reserved for future human review.
 
 To add an example: create a canonical record in `data/gold/` (or an approved reviewed file), assign its real split, run both checks, review framework alternatives and spans, then render only the desired split. Do not put benchmark records in any generated seed or training path.

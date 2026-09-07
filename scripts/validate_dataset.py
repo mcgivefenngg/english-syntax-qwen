@@ -1646,6 +1646,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("paths", nargs="*", type=Path, help="JSONL files or directories")
     parser.add_argument("--benchmark", type=Path, default=Path("eval/benchmark_v1.jsonl"))
+    parser.add_argument("--no-benchmark", action="store_true", help="skip held-out benchmark validation")
     parser.add_argument("--schema", type=Path, default=Path("schemas/gold_annotation.schema.json"), help="JSON Schema document to require alongside semantic checks")
     parser.add_argument("--expected-split", choices=tuple(SPLITS), help="require every canonical input record to use this split")
     arguments = parser.parse_args()
@@ -1658,7 +1659,8 @@ def main() -> int:
         print(f"Schema check failed: {error}", file=sys.stderr)
         return 1
     paths = arguments.paths or [Path("data/gold"), Path("data/reviewed")]
-    errors = validate_files(paths, arguments.benchmark, arguments.schema)
+    benchmark_path = None if arguments.no_benchmark else arguments.benchmark
+    errors = validate_files(paths, benchmark_path, arguments.schema)
     if arguments.expected_split:
         for path in iter_jsonl_paths(paths):
             try:

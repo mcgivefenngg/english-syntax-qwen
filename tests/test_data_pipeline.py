@@ -310,6 +310,17 @@ class DataPipelineTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("token alignment mismatch", result.stderr)
 
+    def test_gold_only_cli_can_skip_benchmark(self) -> None:
+        result = subprocess.run(
+            [sys.executable, "scripts/validate_dataset.py", str(GOLD), "--no-benchmark"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Dataset validation passed", result.stdout)
+
     def test_rendered_split_files_are_disjoint(self) -> None:
         train_ids = {record["id"] for _, record in read_jsonl(ROOT / "data" / "splits" / "train_fixture.jsonl")}
         validation_ids = {record["id"] for _, record in read_jsonl(ROOT / "data" / "splits" / "validation_fixture.jsonl")}
