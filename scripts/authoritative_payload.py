@@ -319,12 +319,12 @@ def _subtree_scope(record: dict[str, Any], item: dict[str, Any], scope: dict[str
 
 
 def _word_status(word: dict[str, Any]) -> str:
-    category = word.get("lexical_category")
-    if isinstance(category, str) and category in LEXICAL_CATEGORIES:
-        return "resolved"
     analysis = word.get("lexical_analysis")
     if isinstance(analysis, dict) and analysis.get("status") == "unresolved":
         return "unresolved"
+    category = word.get("lexical_category")
+    if isinstance(category, str) and category in LEXICAL_CATEGORIES:
+        return "resolved"
     return "missing"
 
 

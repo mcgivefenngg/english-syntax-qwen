@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import unittest
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,8 @@ from scripts.authoritative_payload import (
     authoritative_payload_state,
 )
 from scripts.data_common import read_jsonl
+from scripts.coverage_resolution import resolve_scoring_eligibility
+from scripts.render_sft import linguistic_projection
 from scripts.validate_dataset import validate_record
 
 
@@ -62,6 +65,19 @@ def unresolved_lexical_analysis() -> dict[str, Any]:
     }
 
 
+def lexical_node_record(*word_ids: str) -> dict[str, Any]:
+    record = copy.deepcopy(FIXTURE)
+    record["annotation_scope"]["dimensions"] = [
+        entry
+        for entry in record["annotation_scope"]["dimensions"]
+        if entry.get("dimension") != "lexical_category"
+    ] + [
+        declaration("lexical_category", {"kind": "node", "node": word_id})
+        for word_id in word_ids
+    ]
+    return record
+
+
 def typed_relation(relation_type: str) -> dict[str, Any]:
     return {
         "id": f"rel-{relation_type}",
@@ -73,6 +89,53 @@ def typed_relation(relation_type: str) -> dict[str, Any]:
 
 
 class AuthoritativePayloadContractTests(unittest.TestCase):
+    def test_valid_lexical_scalar_without_unresolved_analysis_remains_resolved(self) -> None:
+        record = lexical_node_record("w0")
+        payload = authoritative_payload(record, "lexical_category", "w0")
+        self.assertIs(payload.state, AuthoritativePayloadState.PRESENT)
+        self.assertTrue(payload.fully_resolved)
+
+    def test_null_lexical_scalar_with_unresolved_analysis_remains_unresolved(self) -> None:
+        record = lexical_node_record("w0")
+        word = record["words"][0]
+        word["lexical_category"] = None
+        word["lexical_analysis"] = unresolved_lexical_analysis()
+        payload = authoritative_payload(record, "lexical_category", "w0")
+        self.assertIs(payload.state, AuthoritativePayloadState.UNRESOLVED_ONLY)
+        self.assertFalse(payload.fully_resolved)
+
+    def test_unresolved_lexical_analysis_overrides_stale_scalar(self) -> None:
+        record = lexical_node_record("w0")
+        record["words"][0]["lexical_analysis"] = unresolved_lexical_analysis()
+        payload = authoritative_payload(record, "lexical_category", "w0")
+        self.assertIs(payload.state, AuthoritativePayloadState.UNRESOLVED_ONLY)
+        self.assertFalse(payload.has_resolved_content)
+        self.assertFalse(payload.fully_resolved)
+
+        errors = validate_record(record, "stale-lexical-category")
+        self.assertTrue(any("cannot retain a canonical lexical_category" in error for error in errors))
+
+    def test_stale_scalar_is_not_fully_resolved_or_scoreable(self) -> None:
+        record = lexical_node_record("w0")
+        record["words"][0]["lexical_analysis"] = unresolved_lexical_analysis()
+        decision = resolve_scoring_eligibility(record, "lexical_category", "w0")
+        self.assertFalse(decision.scoreable)
+        self.assertIsNone(decision.coverage_state)
+
+    def test_default_projection_omits_stale_lexical_category(self) -> None:
+        record = lexical_node_record("w0")
+        record["words"][0]["lexical_analysis"] = unresolved_lexical_analysis()
+        projection = linguistic_projection(record)
+        self.assertNotIn("w0", {word["id"] for word in projection.get("words", [])})
+        self.assertNotIn("determinative", json.dumps(projection, ensure_ascii=False))
+
+    def test_unrelated_lexical_word_remains_resolved(self) -> None:
+        record = lexical_node_record("w0", "w1")
+        record["words"][0]["lexical_analysis"] = unresolved_lexical_analysis()
+        payload = authoritative_payload(record, "lexical_category", "w1")
+        self.assertIs(payload.state, AuthoritativePayloadState.PRESENT)
+        self.assertTrue(payload.fully_resolved)
+
     def test_resolved_lexical_categories_satisfy_present_coverage(self) -> None:
         payload = authoritative_payload(FIXTURE, "lexical_category")
         self.assertIs(payload.state, AuthoritativePayloadState.PRESENT)
