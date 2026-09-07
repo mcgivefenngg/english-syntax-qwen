@@ -9,7 +9,12 @@ from typing import Any
 
 from scripts.data_common import read_jsonl
 from scripts.migrate_v021 import migrate, migrate_file
-from scripts.repair_v031_data import _repair_output_hash, repair_file, repair_record
+from scripts.repair_v031_data import (
+    REPAIR_VERSION,
+    _repair_output_hash,
+    repair_file,
+    repair_record,
+)
 from scripts.validate_dataset import validate_record
 
 
@@ -340,6 +345,89 @@ class MigrationSafetyTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     repair_record(record)
                 self.assertEqual(record, before)
+
+    def repaired_fixture(self) -> dict[str, Any]:
+        record = copy.deepcopy(FIXTURE)
+        repair_record(record)
+        return record
+
+    def test_direct_repair_protects_reviewed_already_repaired_records(self) -> None:
+        for status in ("linguistically_reviewed", "approved_for_training", "canonical_gold"):
+            with self.subTest(status=status):
+                record = self.repaired_fixture()
+                record["review_metadata"]["review_status"] = status
+                before = copy.deepcopy(record)
+                with self.assertRaises(ValueError):
+                    repair_record(record)
+                self.assertEqual(record, before)
+
+    def test_first_direct_repair_writes_trusted_output_hash(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        before = copy.deepcopy(record)
+        result = repair_record(record)
+        self.assertIs(result, record)
+        self.assertNotEqual(record, before)
+        self.assertEqual(result["migration_metadata"]["fixture_repair_version"], REPAIR_VERSION)
+        self.assertEqual(result["migration_metadata"]["repair_output_hash"], _repair_output_hash(result))
+        self.assertEqual(validate_record(result, "first-direct-repair"), [])
+
+    def test_direct_repair_replaces_untrusted_hash_on_fresh_input(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["migration_metadata"]["repair_output_hash"] = "0" * 64
+        result = repair_record(record)
+        self.assertNotEqual(result["migration_metadata"]["repair_output_hash"], "0" * 64)
+        self.assertEqual(result["migration_metadata"]["repair_output_hash"], _repair_output_hash(result))
+        self.assertEqual(validate_record(result, "fresh-stale-hash"), [])
+
+    def test_direct_repair_of_canonical_invalid_fresh_input_fails_without_mutation(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["sentence"] = ""
+        before = copy.deepcopy(record)
+        with self.assertRaisesRegex(ValueError, "canonical V0.4 validation failed"):
+            repair_record(record)
+        self.assertEqual(record, before)
+
+    def test_already_repaired_direct_noop_with_valid_hash_succeeds(self) -> None:
+        record = self.repaired_fixture()
+        before = copy.deepcopy(record)
+        result = repair_record(record)
+        self.assertIs(result, record)
+        self.assertEqual(record, before)
+        self.assertEqual(record["migration_metadata"]["repair_output_hash"], _repair_output_hash(record))
+        self.assertEqual(validate_record(record, "already-repaired-noop"), [])
+
+    def test_already_repaired_direct_rejects_missing_output_hash(self) -> None:
+        record = self.repaired_fixture()
+        del record["migration_metadata"]["repair_output_hash"]
+        before = copy.deepcopy(record)
+        with self.assertRaisesRegex(ValueError, "repaired output hash is required"):
+            repair_record(record)
+        self.assertEqual(record, before)
+
+    def test_already_repaired_direct_rejects_stale_output_hash(self) -> None:
+        record = self.repaired_fixture()
+        record["migration_metadata"]["repair_output_hash"] = _repair_output_hash({"tampered": True})
+        before = copy.deepcopy(record)
+        with self.assertRaisesRegex(ValueError, "repaired output hash mismatch"):
+            repair_record(record)
+        self.assertEqual(record, before)
+
+    def test_already_repaired_direct_rejects_tampered_content_with_stale_hash(self) -> None:
+        record = self.repaired_fixture()
+        stored_hash = record["migration_metadata"]["repair_output_hash"]
+        record["sentence"] = "Tampered sentence."
+        with self.assertRaisesRegex(ValueError, "repaired output hash mismatch"):
+            repair_record(record)
+        self.assertEqual(record["migration_metadata"]["repair_output_hash"], stored_hash)
+
+    def test_already_repaired_direct_rejects_canonical_invalid_with_matching_hash(self) -> None:
+        record = self.repaired_fixture()
+        record["sentence"] = ""
+        record["migration_metadata"]["repair_output_hash"] = _repair_output_hash(record)
+        before = copy.deepcopy(record)
+        with self.assertRaisesRegex(ValueError, "canonical V0.4 validation failed"):
+            repair_record(record)
+        self.assertEqual(record, before)
 
     def test_repaired_output_hash_is_stable_and_repeat_safe(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

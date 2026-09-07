@@ -266,9 +266,45 @@ def _repair_record_unchecked(record: dict[str, Any]) -> dict[str, Any]:
     return record
 
 
+def _already_repaired(record: dict[str, Any]) -> bool:
+    return (
+        record.get("schema_version") == TARGET_SCHEMA_VERSION
+        and isinstance(record.get("migration_metadata"), dict)
+        and record["migration_metadata"].get("fixture_repair_version") == REPAIR_VERSION
+    )
+
+
 def repair_record(record: dict[str, Any]) -> dict[str, Any]:
+    """Repair one record while enforcing repaired-output provenance integrity.
+
+    A successful return guarantees that the protected-provenance check
+    passed, ``migration_metadata.repair_output_hash`` matches the returned
+    content under ``_repair_output_hash()``, and the final record passes
+    canonical V0.4 validation.  Already-repaired inputs are verified as-is:
+    a missing or stale output hash fails closed and is never regenerated,
+    because silently re-hashing would erase evidence of tampering.  The
+    caller's dict is updated in place only after every check succeeds.
+    """
     assert_fixture_repair_allowed(record)
-    return _repair_record_unchecked(record)
+    identifier = record.get("id")
+    if _already_repaired(record):
+        stored_hash = record["migration_metadata"].get(REPAIR_OUTPUT_HASH_FIELD)
+        if stored_hash is None:
+            raise ValueError(f"{identifier}: repaired output hash is required")
+        if not isinstance(stored_hash, str) or stored_hash != _repair_output_hash(record):
+            raise ValueError(f"{identifier}: repaired output hash mismatch")
+        validate_canonical_record(record, f"{identifier}: repaired output")
+        return record
+    candidate = copy.deepcopy(record)
+    repaired = _repair_record_unchecked(candidate)
+    metadata = repaired.get("migration_metadata")
+    if not isinstance(metadata, dict):
+        raise ValueError(f"{identifier}: migration_metadata must be an object")
+    metadata[REPAIR_OUTPUT_HASH_FIELD] = _repair_output_hash(repaired)
+    validate_canonical_record(repaired, f"{identifier}: repaired output")
+    record.clear()
+    record.update(repaired)
+    return record
 
 
 def _load_manifest(path: Path) -> dict[str, dict[str, Any]]:
@@ -309,11 +345,7 @@ def repair_file(path: Path, manifest_path: Path | None = None) -> None:
                     rows.append(record)
                     continue
                 assert_fixture_repair_allowed(record)
-                already_repaired = (
-                    record.get("schema_version") == TARGET_SCHEMA_VERSION
-                    and isinstance(record.get("migration_metadata"), dict)
-                    and record["migration_metadata"].get("fixture_repair_version") == REPAIR_VERSION
-                )
+                already_repaired = _already_repaired(record)
                 if record.get("schema_version") != entry["source_version"] and not already_repaired:
                     raise ValueError(f"{record.get('id')}: manifest source_version mismatch")
                 if already_repaired:
