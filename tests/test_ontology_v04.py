@@ -347,6 +347,8 @@ class OntologyV04Tests(unittest.TestCase):
         self.assertTrue(any("schema validation failed" in error for error in errors))
         record["framework"]["alternatives"] = [legacy]
         record["legacy_alternative_metadata"] = [legacy]
+        record["framework"].pop("alternatives")
+        record.pop("framework_alternatives")
         framework_scope = next(entry for entry in record["annotation_scope"]["dimensions"] if entry["dimension"] == "framework_mapping")
         framework_scope.update(completeness="complete", omission="none", evidence="present")
         projection = linguistic_projection(record)

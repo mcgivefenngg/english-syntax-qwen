@@ -14,6 +14,7 @@ from scripts.coverage_resolution import (
     resolve_coverage,
     resolve_scoring_eligibility,
 )
+from scripts.canonical_schema import canonical_schema_issues
 from scripts.data_common import read_jsonl
 from scripts.validate_dataset import coverage_allows_score, validate_record
 
@@ -66,7 +67,34 @@ class CoverageResolutionTests(unittest.TestCase):
         self.assertIs(resolve_coverage(record, "lexical_category", "w0"), CoverageState.COMPLETE)
         self.assertIs(resolve_coverage(record, "lexical_category"), CoverageState.COMPLETE)
 
-    def test_canonical_safety_fail_closed_for_record_level_mutations(self) -> None:
+    def test_schema_invalid_canonical_mutations_fail_closed_at_public_apis(self) -> None:
+        mutations = {
+            "invalid split": lambda record: record.__setitem__("split", "not-a-split"),
+            "invalid difficulty": lambda record: record.__setitem__("difficulty", "not-a-difficulty"),
+            "invalid source_type": lambda record: record.__setitem__("source_type", "not-a-source-type"),
+            "invalid sentence_type": lambda record: record.__setitem__("sentence_type", "not-a-sentence-type"),
+            "malformed framework": lambda record: record.__setitem__("framework", []),
+            "invalid capability_tags": lambda record: record.__setitem__("capability_tags", ["not-a-tag"]),
+            "empty capability_tags": lambda record: record.__setitem__("capability_tags", []),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                record = with_dimensions(
+                    declaration(
+                        {"kind": "node", "node": "w0"},
+                        "complete",
+                        dimension="lexical_category",
+                    )
+                )
+                mutate(record)
+                self.assertTrue(canonical_schema_issues(record))
+                with self.assertRaises(CoverageResolutionError):
+                    resolve_coverage(record, "lexical_category", "w0")
+                decision = resolve_scoring_eligibility(record, "lexical_category", "w0")
+                self.assertFalse(decision.scoreable)
+                self.assertIsNone(decision.coverage_state)
+
+    def test_canonical_schema_admission_fail_closed_for_record_level_mutations(self) -> None:
         mutations = {
             "missing annotation scope coverage": lambda record: record["annotation_scope"].pop("coverage"),
             "invalid annotation scope coverage": lambda record: record["annotation_scope"].__setitem__("coverage", "bogus"),

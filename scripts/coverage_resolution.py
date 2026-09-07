@@ -22,9 +22,9 @@ except ImportError:
     from scripts.authoritative_payload import AuthoritativePayload, AuthoritativePayloadState, authoritative_payload, authoritative_payload_state
 
 try:
-    from canonical_safety import canonical_record_safety_issues
+    from canonical_schema import canonical_schema_issues, canonical_schema_issue_text
 except ImportError:
-    from scripts.canonical_safety import canonical_record_safety_issues
+    from scripts.canonical_schema import canonical_schema_issues, canonical_schema_issue_text
 
 
 class CoverageState(str, Enum):
@@ -472,9 +472,11 @@ def resolve_coverage(
     target: str | dict[str, Any] | None = None,
 ) -> CoverageState:
     """Resolve by exact node, containment-minimal region, then record scope."""
-    safety_issues = canonical_record_safety_issues(record)
-    if safety_issues:
-        raise CoverageResolutionError(safety_issues[0])
+    schema_issues = canonical_schema_issues(record)
+    if schema_issues:
+        raise CoverageResolutionError(
+            f"canonical schema validation failed: {canonical_schema_issue_text(schema_issues[0])}"
+        )
     if dimension_spec(dimension) is None:
         raise CoverageResolutionError(f"unknown coverage dimension {dimension!r}")
     identity_issues = _record_identity_issues(record)

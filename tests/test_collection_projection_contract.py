@@ -143,7 +143,6 @@ class CollectionProjectionContractTests(unittest.TestCase):
         record["annotation_scope"]["dimensions"].append(
             declaration("syntactic_function", {"kind": "node", "node": "obj"}, "omitted", "intentional", "unannotated")
         )
-        record["constituents"][1].pop("function", None)
         projection = linguistic_projection(record)
         self.assertEqual(projection["lexical_valency"][0]["selected_complements"], ["obj"])
 

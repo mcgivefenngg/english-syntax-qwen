@@ -15,8 +15,13 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from canonical_schema import canonical_schema_issues, canonical_schema_required_fields
+except ImportError:
+    from scripts.canonical_schema import canonical_schema_issues, canonical_schema_required_fields
+
+try:
     from jsonschema import Draft202012Validator
-except ImportError:  # pragma: no cover - exercised by the CLI failure path
+except ImportError:  # pragma: no cover - exercised by the dependency failure path
     Draft202012Validator = None
 
 try:
@@ -59,13 +64,6 @@ try:
 except ImportError:
     from scripts.collection_contract import normalize_predicate_reference, predicate_reference_issue
 
-try:
-    from canonical_safety import CANONICAL_REQUIRED_FIELDS
-except ImportError:
-    from scripts.canonical_safety import CANONICAL_REQUIRED_FIELDS
-
-
-REQUIRED = CANONICAL_REQUIRED_FIELDS
 ANALYSIS_LEVELS = {"lexical_category", "phrase_category", "syntactic_function", "clause_structure", "framework", "semantic_role", "span", "none"}
 FRAMEWORK_SENSITIVE_ANALYSIS_TYPES = {"ecm", "small_clause", "ud_pos", "ptb_pos", "gerund_as_noun", "control", "raising", "perception", "perception_construction"}
 REVIEW_STATUSES = {"schema_migrated", "structurally_validated", "review_required", "linguistically_reviewed", "approved_for_training", "canonical_gold"}
@@ -90,16 +88,6 @@ ALTERNATIVE_LINK_FIELDS = {
 AMBIGUITY_LINK_FIELDS = {
     "alternative_ids", "wrapper_ids", "relation_ids", "constituent_ids", "clause_refs",
 }
-@lru_cache(maxsize=4)
-def _schema_validator(schema_path_value: str | None = None) -> Any:
-    if Draft202012Validator is None:
-        raise RuntimeError("jsonschema dependency is required for canonical validation")
-    schema_path = Path(schema_path_value) if schema_path_value else Path(__file__).resolve().parents[1] / "schemas" / "gold_annotation.schema.json"
-    with schema_path.open(encoding="utf-8") as handle:
-        schema_document = json.load(handle)
-    validator = Draft202012Validator(schema_document)
-    validator.check_schema(schema_document)
-    return validator
 
 
 @lru_cache(maxsize=1)
@@ -122,14 +110,9 @@ def _schema_path(path: Any) -> str:
 
 
 def _validate_json_schema(record: dict[str, Any], location: str, errors: list[str], schema_path: Path | None = None) -> None:
-    try:
-        validator = _schema_validator(str(schema_path) if schema_path else None)
-    except (OSError, json.JSONDecodeError, RuntimeError, TypeError) as error:
-        _error(errors, location, f"schema engine unavailable: {error}")
-        return
     record_id = record.get("id", "<missing-id>")
-    for schema_error in sorted(validator.iter_errors(record), key=lambda item: list(item.path)):
-        _error(errors, f"{location} record {record_id!r}{_schema_path(schema_error.path)}", f"schema validation failed: {schema_error.message}")
+    for schema_issue in canonical_schema_issues(record, schema_path):
+        _error(errors, f"{location} record {record_id!r}{_schema_path(schema_issue.path)}", f"schema validation failed: {schema_issue.message}")
 
 
 def _validate_rendered_schema(record: dict[str, Any], location: str, errors: list[str]) -> None:
@@ -798,7 +781,11 @@ def validate_record(record: Any, location: str, schema_path: Path | None = None)
                         _validate_rendered_references(payload, f"{location}.messages[2].content", errors)
         return errors
     _validate_json_schema(record, location, errors, schema_path)
-    missing = REQUIRED - record.keys()
+    try:
+        required_fields = canonical_schema_required_fields(schema_path)
+    except (OSError, json.JSONDecodeError, RuntimeError, TypeError):
+        return errors
+    missing = required_fields - record.keys()
     for field in sorted(missing):
         _error(errors, location, f"missing required field {field!r}")
     if missing:
