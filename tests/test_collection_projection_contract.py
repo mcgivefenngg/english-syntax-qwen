@@ -174,14 +174,14 @@ class CollectionProjectionContractTests(unittest.TestCase):
     def test_confirmed_empty_record_scope_does_not_hide_more_specific_valency(self) -> None:
         record = record_with(
             "lexical_valency",
-            declaration("lexical_valency", {"kind": "record"}, evidence="empty"),
+            declaration("lexical_valency", {"kind": "record"}, "partial", "intentional", "unannotated"),
             [VALENCY],
         )
         record["annotation_scope"]["dimensions"].append(
             declaration("lexical_valency", {"kind": "node", "node": "w2"})
         )
         self.assertEqual(validate_record(record, "valency-layered"), [])
-        self.assertIs(resolve_coverage(record, "lexical_valency"), CoverageState.CONFIRMED_EMPTY)
+        self.assertIs(resolve_coverage(record, "lexical_valency"), CoverageState.UNANNOTATED)
         self.assertIs(resolve_coverage(record, "lexical_valency", "w2"), CoverageState.COMPLETE)
         self.assertEqual(linguistic_projection(record)["lexical_valency"][0]["predicate"], "w2")
 

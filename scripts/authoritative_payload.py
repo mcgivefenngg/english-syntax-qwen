@@ -1000,19 +1000,19 @@ def confirmed_empty_eligible(
 
     Confirmed-empty means the annotator explicitly inspected the dimension and
     established that the applicable canonical collection contains zero items for
-    this scope. It is never satisfied by an absent field, a non-list container,
-    or owned payload the collector could not classify. The registry's
-    ``requires_payload_field``/``content_field`` contract is the single source of
-    truth for which dimensions carry an explicit empty representation. A
-    non-empty field is still eligible only when every item is owned by a more
-    specific scope, leaving zero resolved/unresolved/missing payload here; for
-    record-only collections that reduces to an explicit empty list.
+    this scope. It requires an explicit empty collection in the record; a
+    non-empty list whose items are all owned by more-specific scopes does not
+    satisfy the contract. The registry's ``requires_payload_field``/``content_field``
+    contract is the single source of truth for which dimensions carry an explicit
+    empty representation.
     """
     if spec is None or not spec.requires_payload_field or spec.content_field is None:
         return False
     if spec.content_field not in record:
         return False
     if not isinstance(record[spec.content_field], list):
+        return False
+    if record[spec.content_field] != []:
         return False
     return (
         payload.resolved_count == 0

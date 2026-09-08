@@ -5,7 +5,14 @@ import unittest
 from pathlib import Path
 from typing import Any
 
-from scripts.authoritative_payload import AuthoritativePayloadState, authoritative_payload_state
+from scripts.authoritative_payload import (
+    AuthoritativePayload,
+    AuthoritativePayloadState,
+    authoritative_payload,
+    authoritative_payload_state,
+    confirmed_empty_eligible,
+    dimension_spec,
+)
 from scripts.coverage_resolution import (
     CoverageResolutionError,
     CoverageState,
@@ -362,6 +369,54 @@ class ConfirmedEmptyEvidenceTests(unittest.TestCase):
             authoritative_payload_state(record, "dependencies"),
             AuthoritativePayloadState.CONFIRMED_EMPTY,
         )
+
+    def test_non_empty_content_with_more_specific_scope_is_not_confirmed_empty(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["annotation_scope"]["dimensions"] = [
+            existing
+            for existing in record["annotation_scope"]["dimensions"]
+            if existing.get("dimension") != "phrase_constituency"
+        ] + [
+            declaration("phrase_constituency", {"kind": "record"}, evidence="empty"),
+            declaration("phrase_constituency", {"kind": "node", "node": "subj"}),
+            declaration("phrase_constituency", {"kind": "node", "node": "obj"}),
+        ]
+        self.assertTrue(len(record["constituents"]) > 0)
+        errors = validate_record(record, "a2a-scoped-nonempty")
+        self.assertTrue(any("evidence='empty'" in error and "phrase_constituency" in error for error in errors))
+        self.assertIsNot(
+            authoritative_payload_state(record, "phrase_constituency"),
+            AuthoritativePayloadState.CONFIRMED_EMPTY,
+        )
+        with self.assertRaises(CoverageResolutionError):
+            resolve_coverage(record, "phrase_constituency")
+        decision = resolve_scoring_eligibility(record, "phrase_constituency")
+        self.assertFalse(decision.scoreable)
+        self.assertIsNone(decision.coverage_state)
+        projection = linguistic_projection(record)
+        self.assertNotEqual(projection.get("constituents"), [])
+
+    def test_confirmed_empty_eligible_requires_explicit_empty_list(self) -> None:
+        spec = dimension_spec("dependencies")
+        record_nonempty = collection_record("dependencies", [DEPENDENCY])
+        record_nonempty["annotation_scope"]["dimensions"] = [
+            existing
+            for existing in record_nonempty["annotation_scope"]["dimensions"]
+            if existing.get("dimension") != "dependencies"
+        ] + [empty_declaration("dependencies")]
+        payload_nonempty = authoritative_payload(record_nonempty, "dependencies")
+        payload_nonempty_zero = AuthoritativePayload(
+            dimension="dependencies",
+            target=None,
+            state=AuthoritativePayloadState.ABSENT,
+            resolved_count=0,
+            unresolved_count=0,
+            missing_count=0,
+        )
+        self.assertFalse(confirmed_empty_eligible(record_nonempty, spec, payload_nonempty_zero))
+        record_empty = collection_record("dependencies", [])
+        payload_empty = authoritative_payload(record_empty, "dependencies")
+        self.assertTrue(confirmed_empty_eligible(record_empty, spec, payload_empty))
 
 
 if __name__ == "__main__":
