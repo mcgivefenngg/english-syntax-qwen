@@ -15,9 +15,9 @@ except ImportError:
     from scripts.coverage_resolution import CoverageResolutionError, CoverageState, collection_item_coverage_state, resolve_coverage
 
 try:
-    from authoritative_payload import authoritative_payload
+    from authoritative_payload import authoritative_payload, _dependency_status, _lexical_valency_status, _record_objects, _semantic_role_status, _constituent_ids
 except ImportError:
-    from scripts.authoritative_payload import authoritative_payload
+    from scripts.authoritative_payload import authoritative_payload, _dependency_status, _lexical_valency_status, _record_objects, _semantic_role_status, _constituent_ids
 
 try:
     from collection_contract import normalize_collection_item
@@ -454,6 +454,18 @@ def _partial_record_scalar_covered(record: dict[str, Any], field: str, dimension
     return False
 
 
+def _is_valid_collection_item(record: dict[str, Any], field: str, item: Any) -> bool:
+    objects = _record_objects(record)
+    if field == "dependencies":
+        return _dependency_status(record, objects, item) == "resolved"
+    if field == "semantic_roles":
+        constituent_ids = _constituent_ids(record)
+        return _semantic_role_status(record, objects, constituent_ids, item) == "resolved"
+    if field == "lexical_valency":
+        return _lexical_valency_status(record, objects, item) == "resolved"
+    return True
+
+
 def _project_relation_collection(record: dict[str, Any], field: str, dimension: str, identifiers: Any, rendering_mode: str) -> list[dict[str, Any]] | None:
     record_state = _coverage_state(record, dimension)
     values = record.get(field)
@@ -465,13 +477,13 @@ def _project_relation_collection(record: dict[str, Any], field: str, dimension: 
     context = {"dependencies": "dependency", "semantic_roles": "semantic_role", "heads": "head_relation"}.get(field, field)
     if spec is not None and spec.allowed_scope_kinds == frozenset({"record"}):
         if record_state == CoverageState.COMPLETE:
-            positive: list[Any] = list(values)
+            positive: list[Any] = [value for value in values if _is_valid_collection_item(record, field, value)]
         elif (
             record_state == CoverageState.PARTIAL_COVERED
             and spec.partial_present_target_source == "record"
         ):
             resolved = _resolved_positive_identifiers(record, dimension)
-            positive = [value for index, value in enumerate(values) if f"{field}[{index}]" in resolved]
+            positive = [value for index, value in enumerate(values) if f"{field}[{index}]" in resolved and _is_valid_collection_item(record, field, value)]
         else:
             return None
         result = []
@@ -481,11 +493,11 @@ def _project_relation_collection(record: dict[str, Any], field: str, dimension: 
                 result.append(_without_governance(normalized, context, rendering_mode=rendering_mode))
         return result or None
     if record_state == CoverageState.COMPLETE:
-        return [_without_governance(item, context, rendering_mode=rendering_mode) for item in values]
+        return [_without_governance(item, context, rendering_mode=rendering_mode) for item in values if _is_valid_collection_item(record, field, item)]
     if record_state in {CoverageState.OMITTED, CoverageState.UNANNOTATED, CoverageState.OUT_OF_SCOPE, CoverageState.PARTIAL_UNCOVERED}:
         filtered = []
         for item in values:
-            if not isinstance(item, dict):
+            if not isinstance(item, dict) or not _is_valid_collection_item(record, field, item):
                 continue
             targets = identifiers(item)
             if any(isinstance(target, str) and _covered(record, dimension, target) for target in targets):
@@ -493,7 +505,7 @@ def _project_relation_collection(record: dict[str, Any], field: str, dimension: 
         return filtered or None
     filtered = []
     for item in values:
-        if isinstance(item, dict) and any(isinstance(target, str) and _covered(record, dimension, target) for target in identifiers(item)):
+        if isinstance(item, dict) and _is_valid_collection_item(record, field, item) and any(isinstance(target, str) and _covered(record, dimension, target) for target in identifiers(item)):
             filtered.append(_without_governance(item, context, rendering_mode=rendering_mode))
     return filtered or None
 
@@ -516,7 +528,7 @@ def _project_valency(record: dict[str, Any], rendering_mode: str) -> list[dict[s
         return None
     result: list[dict[str, Any]] = []
     for source in values:
-        if not isinstance(source, dict):
+        if not isinstance(source, dict) or not _is_valid_collection_item(record, "lexical_valency", source):
             continue
         if collection_item_coverage_state(record, "lexical_valency", source) not in _CONTENT_COVERED_STATES:
             continue

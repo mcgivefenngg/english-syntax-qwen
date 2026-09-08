@@ -871,5 +871,298 @@ class CanonicalNodePayloadIntegrityTests(unittest.TestCase):
         self.assertFalse(decision.scoreable)
 
 
+class CollectionPayloadIntegrityTests(unittest.TestCase):
+    """A1b: validator-invalid dependency/semantic-role/valency items are never resolved positive payload."""
+
+    def test_valid_dependency_remains_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["dependencies"] = [{"relation": "obj", "head": "w2", "dependent": "obj"}]
+        for dim in record["annotation_scope"]["dimensions"]:
+            if dim.get("dimension") == "dependencies":
+                dim["completeness"] = "complete"
+                dim["evidence"] = "present"
+                dim["omission"] = "none"
+        record["annotation_scope"]["intentionally_omitted"] = [
+            d for d in record["annotation_scope"].get("intentionally_omitted", [])
+            if d != "dependencies"
+        ]
+        record["annotation_scope"]["annotated_dimensions"] = list(set(
+            record["annotation_scope"].get("annotated_dimensions", []) + ["dependencies"]
+        ))
+        payload = authoritative_payload(record, "dependencies")
+        self.assertIs(payload.state, AuthoritativePayloadState.PRESENT)
+        self.assertTrue(payload.fully_resolved)
+        self.assertEqual(validate_record(record, "valid-dep"), [])
+
+    def test_dangling_dependency_source_is_not_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["dependencies"] = [{"relation": "obj", "head": "w2", "dependent": "obj", "source": "ghost"}]
+        self.assertTrue(any("source" in e for e in validate_record(record, "dangling-source")))
+        payload = authoritative_payload(record, "dependencies")
+        self.assertIs(payload.state, AuthoritativePayloadState.ABSENT)
+        self.assertEqual(payload.resolved_count, 0)
+        self.assertEqual(payload.missing_count, 1)
+
+    def test_dangling_dependency_target_is_not_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["dependencies"] = [{"relation": "obj", "head": "w2", "dependent": "obj", "target": "ghost"}]
+        self.assertTrue(any("target" in e for e in validate_record(record, "dangling-target")))
+        payload = authoritative_payload(record, "dependencies")
+        self.assertIs(payload.state, AuthoritativePayloadState.ABSENT)
+        self.assertEqual(payload.resolved_count, 0)
+        self.assertEqual(payload.missing_count, 1)
+
+    def test_valid_optional_source_target_remains_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["dependencies"] = [{"relation": "obj", "head": "w2", "dependent": "obj", "source": "w1", "target": "w3"}]
+        for dim in record["annotation_scope"]["dimensions"]:
+            if dim.get("dimension") == "dependencies":
+                dim["completeness"] = "complete"
+                dim["evidence"] = "present"
+                dim["omission"] = "none"
+        record["annotation_scope"]["intentionally_omitted"] = [
+            d for d in record["annotation_scope"].get("intentionally_omitted", [])
+            if d != "dependencies"
+        ]
+        record["annotation_scope"]["annotated_dimensions"] = list(set(
+            record["annotation_scope"].get("annotated_dimensions", []) + ["dependencies"]
+        ))
+        self.assertEqual(validate_record(record, "valid-optional"), [])
+        payload = authoritative_payload(record, "dependencies")
+        self.assertIs(payload.state, AuthoritativePayloadState.PRESENT)
+        self.assertTrue(payload.fully_resolved)
+
+    def test_invalid_dependency_is_not_scoreable(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["dependencies"] = [{"relation": "obj", "head": "w2", "dependent": "obj", "source": "ghost"}]
+        decision = resolve_scoring_eligibility(record, "dependencies")
+        self.assertFalse(decision.scoreable)
+
+    def test_mixed_valid_invalid_dependencies_complete_not_fully_resolved(self) -> None:
+        record = with_declaration(FIXTURE, declaration("dependencies", {"kind": "record"}))
+        record["dependencies"] = [
+            {"relation": "obj", "head": "w2", "dependent": "obj", "source": "ghost"},
+            {"relation": "subj", "head": "w2", "dependent": "subj"},
+        ]
+        payload = authoritative_payload(record, "dependencies")
+        self.assertIs(payload.state, AuthoritativePayloadState.PRESENT)
+        self.assertFalse(payload.fully_resolved)
+        self.assertEqual(payload.resolved_count, 1)
+        self.assertEqual(payload.missing_count, 1)
+        decision = resolve_scoring_eligibility(record, "dependencies")
+        self.assertFalse(decision.scoreable)
+
+    def test_renderer_omits_invalid_dependency(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["dependencies"] = [
+            {"relation": "obj", "head": "w2", "dependent": "obj", "source": "ghost"},
+            {"relation": "subj", "head": "w2", "dependent": "subj"},
+        ]
+        payload = authoritative_payload(record, "dependencies")
+        self.assertEqual(payload.resolved_count, 1)
+        self.assertEqual(payload.missing_count, 1)
+        self.assertEqual(payload.resolved_ids, ("dependencies[1]",))
+
+    def test_valid_sibling_dependency_still_projects(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["dependencies"] = [
+            {"relation": "obj", "head": "w2", "dependent": "obj", "source": "ghost"},
+            {"relation": "subj", "head": "w2", "dependent": "subj"},
+        ]
+        valid = authoritative_payload(record, "dependencies")
+        self.assertEqual(valid.resolved_count, 1)
+
+    def test_partial_present_only_invalid_dependency_not_positive(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["dependencies"] = [{"relation": "obj", "head": "w2", "dependent": "obj", "source": "ghost"}]
+        payload = authoritative_payload(record, "dependencies")
+        self.assertIs(payload.state, AuthoritativePayloadState.ABSENT)
+        self.assertEqual(payload.resolved_count, 0)
+
+    def test_valid_semantic_role_remains_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["semantic_roles"] = [{"constituent": "obj", "role": "Theme"}]
+        payload = authoritative_payload(record, "semantic_roles")
+        self.assertIs(payload.state, AuthoritativePayloadState.PRESENT)
+        self.assertTrue(payload.fully_resolved)
+        self.assertEqual(validate_record(record, "valid-role"), [])
+
+    def test_word_as_semantic_role_constituent_is_not_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["semantic_roles"] = [{"constituent": "w1", "role": "Theme"}]
+        self.assertTrue(any("constituent" in e for e in validate_record(record, "word-constituent")))
+        payload = authoritative_payload(record, "semantic_roles")
+        self.assertIs(payload.state, AuthoritativePayloadState.ABSENT)
+        self.assertEqual(payload.resolved_count, 0)
+        self.assertEqual(payload.missing_count, 1)
+
+    def test_dangling_semantic_role_constituent_is_not_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["semantic_roles"] = [{"constituent": "ghost", "role": "Theme"}]
+        self.assertTrue(any("constituent" in e for e in validate_record(record, "dangling-constituent")))
+        payload = authoritative_payload(record, "semantic_roles")
+        self.assertIs(payload.state, AuthoritativePayloadState.ABSENT)
+        self.assertEqual(payload.resolved_count, 0)
+
+    def test_invalid_semantic_role_vocabulary_is_not_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["semantic_roles"] = [{"constituent": "obj", "role": "BogusRole"}]
+        self.assertTrue(any("controlled vocabulary" in e for e in validate_record(record, "bad-role")))
+        payload = authoritative_payload(record, "semantic_roles")
+        self.assertIs(payload.state, AuthoritativePayloadState.ABSENT)
+        self.assertEqual(payload.resolved_count, 0)
+
+    def test_valid_semantic_role_predicate_remains_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["semantic_roles"] = [{"constituent": "obj", "role": "Theme", "predicate": "w2"}]
+        self.assertEqual(validate_record(record, "valid-predicate"), [])
+        payload = authoritative_payload(record, "semantic_roles")
+        self.assertIs(payload.state, AuthoritativePayloadState.PRESENT)
+        self.assertTrue(payload.fully_resolved)
+
+    def test_invalid_semantic_role_predicate_is_not_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["semantic_roles"] = [{"constituent": "obj", "role": "Theme", "predicate": "ghost"}]
+        self.assertTrue(any("predicate" in e for e in validate_record(record, "bad-predicate")))
+        payload = authoritative_payload(record, "semantic_roles")
+        self.assertIs(payload.state, AuthoritativePayloadState.ABSENT)
+        self.assertEqual(payload.resolved_count, 0)
+
+    def test_renderer_omits_invalid_semantic_role(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["semantic_roles"] = [
+            {"constituent": "w1", "role": "Theme"},
+            {"constituent": "obj", "role": "Theme"},
+        ]
+        payload = authoritative_payload(record, "semantic_roles")
+        self.assertEqual(payload.resolved_count, 1)
+        self.assertEqual(payload.missing_count, 1)
+
+    def test_valid_sibling_semantic_role_remains_positive(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["semantic_roles"] = [
+            {"constituent": "w1", "role": "Theme"},
+            {"constituent": "obj", "role": "Theme"},
+        ]
+        payload = authoritative_payload(record, "semantic_roles")
+        self.assertEqual(payload.resolved_count, 1)
+
+    def test_complete_mixed_semantic_roles_not_fully_resolved(self) -> None:
+        record = with_declaration(FIXTURE, declaration("semantic_roles", {"kind": "record"}))
+        record["semantic_roles"] = [
+            {"constituent": "w1", "role": "Theme"},
+            {"constituent": "obj", "role": "Theme"},
+        ]
+        payload = authoritative_payload(record, "semantic_roles")
+        self.assertIs(payload.state, AuthoritativePayloadState.PRESENT)
+        self.assertFalse(payload.fully_resolved)
+
+    def test_valid_lexical_valency_remains_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["lexical_valency"] = [{"predicate": "w2", "frame": "transitive", "selected_complements": ["obj"]}]
+        payload = authoritative_payload(record, "lexical_valency")
+        self.assertIs(payload.state, AuthoritativePayloadState.PRESENT)
+        self.assertTrue(payload.fully_resolved)
+        self.assertEqual(validate_record(record, "valid-valency"), [])
+
+    def test_dangling_selected_complement_is_not_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["lexical_valency"] = [{"predicate": "w2", "frame": "transitive", "selected_complements": ["ghost"]}]
+        self.assertTrue(any("selected complement" in e for e in validate_record(record, "dangling-complement")))
+        payload = authoritative_payload(record, "lexical_valency")
+        self.assertIs(payload.state, AuthoritativePayloadState.ABSENT)
+        self.assertEqual(payload.resolved_count, 0)
+        self.assertEqual(payload.missing_count, 1)
+
+    def test_word_as_selected_complement_is_not_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["lexical_valency"] = [{"predicate": "w2", "frame": "transitive", "selected_complements": ["w1"]}]
+        self.assertTrue(any("phrase or clause" in e for e in validate_record(record, "word-complement")))
+        payload = authoritative_payload(record, "lexical_valency")
+        self.assertIs(payload.state, AuthoritativePayloadState.ABSENT)
+        self.assertEqual(payload.resolved_count, 0)
+
+    def test_valid_phrase_selected_complement_remains_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["lexical_valency"] = [{"predicate": "w2", "frame": "transitive", "selected_complements": ["obj"]}]
+        self.assertEqual(validate_record(record, "phrase-complement"), [])
+        payload = authoritative_payload(record, "lexical_valency")
+        self.assertIs(payload.state, AuthoritativePayloadState.PRESENT)
+        self.assertTrue(payload.fully_resolved)
+
+    def test_valid_clause_selected_complement_remains_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["lexical_valency"] = [{"predicate": "w2", "frame": "transitive", "selected_complements": ["c0"]}]
+        self.assertEqual(validate_record(record, "clause-complement"), [])
+        payload = authoritative_payload(record, "lexical_valency")
+        self.assertIs(payload.state, AuthoritativePayloadState.PRESENT)
+        self.assertTrue(payload.fully_resolved)
+
+    def test_mixed_valid_invalid_selected_complements_not_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["lexical_valency"] = [{"predicate": "w2", "frame": "transitive", "selected_complements": ["obj", "ghost"]}]
+        self.assertTrue(any("selected complement" in e for e in validate_record(record, "mixed-complements")))
+        payload = authoritative_payload(record, "lexical_valency")
+        self.assertIs(payload.state, AuthoritativePayloadState.ABSENT)
+        self.assertEqual(payload.resolved_count, 0)
+
+    def test_malformed_selected_complements_container_not_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["lexical_valency"] = [{"predicate": "w2", "frame": "transitive", "selected_complements": "obj"}]
+        self.assertTrue(any("selected_complements must be an array" in e for e in validate_record(record, "bad-container")))
+        payload = authoritative_payload(record, "lexical_valency")
+        self.assertIs(payload.state, AuthoritativePayloadState.ABSENT)
+        self.assertEqual(payload.resolved_count, 0)
+
+    def test_invalid_predicate_is_not_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["lexical_valency"] = [{"predicate": "ghost", "frame": "transitive", "selected_complements": ["obj"]}]
+        self.assertTrue(any("predicate" in e for e in validate_record(record, "bad-predicate")))
+        payload = authoritative_payload(record, "lexical_valency")
+        self.assertIs(payload.state, AuthoritativePayloadState.ABSENT)
+        self.assertEqual(payload.resolved_count, 0)
+
+    def test_target_level_invalid_predicate_does_not_poison_valid(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["lexical_valency"] = [
+            {"predicate": "ghost", "frame": "transitive", "selected_complements": ["obj"]},
+            {"predicate": "w3", "frame": "intransitive", "selected_complements": []},
+        ]
+        invalid = authoritative_payload(record, "lexical_valency", "w2")
+        valid = authoritative_payload(record, "lexical_valency", "w3")
+        self.assertIs(invalid.state, AuthoritativePayloadState.ABSENT)
+        self.assertIs(valid.state, AuthoritativePayloadState.PRESENT)
+        self.assertTrue(valid.fully_resolved)
+
+    def test_complete_mixed_valency_not_fully_resolved(self) -> None:
+        record = with_declaration(FIXTURE, declaration("lexical_valency", {"kind": "record"}))
+        record["lexical_valency"] = [
+            {"predicate": "w2", "frame": "transitive", "selected_complements": ["ghost"]},
+            {"predicate": "w3", "frame": "intransitive", "selected_complements": []},
+        ]
+        payload = authoritative_payload(record, "lexical_valency")
+        self.assertIs(payload.state, AuthoritativePayloadState.PRESENT)
+        self.assertFalse(payload.fully_resolved)
+        self.assertEqual(payload.resolved_count, 1)
+        self.assertEqual(payload.missing_count, 1)
+
+    def test_renderer_omits_invalid_valency(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["lexical_valency"] = [
+            {"predicate": "w2", "frame": "transitive", "selected_complements": ["ghost"]},
+            {"predicate": "w3", "frame": "intransitive", "selected_complements": []},
+        ]
+        payload = authoritative_payload(record, "lexical_valency")
+        self.assertEqual(payload.resolved_count, 1)
+        self.assertEqual(payload.missing_count, 1)
+
+    def test_vp_complementation_uses_same_valency_status(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["lexical_valency"] = [{"predicate": "w2", "frame": "transitive", "selected_complements": ["ghost"]}]
+        payload = authoritative_payload(record, "vp_complementation", "w2")
+        self.assertIs(payload.state, AuthoritativePayloadState.ABSENT)
+        self.assertEqual(payload.resolved_count, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

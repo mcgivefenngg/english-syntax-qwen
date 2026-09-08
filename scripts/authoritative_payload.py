@@ -364,6 +364,77 @@ def _clause_ids(record: dict[str, Any]) -> set[str]:
     return {item["id"] for item in clauses if isinstance(item, dict) and isinstance(item.get("id"), str)}
 
 
+def _constituent_ids(record: dict[str, Any]) -> set[str]:
+    ids: set[str] = set()
+    for field_name in ("constituents", "clauses"):
+        values = record.get(field_name)
+        if not isinstance(values, list):
+            continue
+        for item in values:
+            if isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"]:
+                ids.add(item["id"])
+    return ids
+
+
+def _dependency_status(record: dict[str, Any], objects: dict[str, dict[str, Any]], value: Any) -> str:
+    if not isinstance(value, dict):
+        return "missing"
+    relation = value.get("relation")
+    if not isinstance(relation, str) or not relation:
+        return "missing"
+    head = value.get("head")
+    dependent = value.get("dependent")
+    if not isinstance(head, str) or head not in objects:
+        return "missing"
+    if not isinstance(dependent, str) or dependent not in objects:
+        return "missing"
+    for field in ("source", "target"):
+        ref = value.get(field)
+        if ref is not None and (not isinstance(ref, str) or ref not in objects):
+            return "missing"
+    return "resolved"
+
+
+def _semantic_role_status(
+    record: dict[str, Any],
+    objects: dict[str, dict[str, Any]],
+    constituent_ids: set[str],
+    value: Any,
+) -> str:
+    if not isinstance(value, dict):
+        return "missing"
+    constituent = value.get("constituent")
+    if not isinstance(constituent, str) or constituent not in constituent_ids:
+        return "missing"
+    role = value.get("role")
+    if not isinstance(role, str) or role not in SEMANTIC_ROLES:
+        return "missing"
+    predicate = value.get("predicate")
+    if predicate is not None and normalize_predicate_reference(record, predicate) is None:
+        return "missing"
+    return "resolved"
+
+
+def _lexical_valency_status(record: dict[str, Any], objects: dict[str, dict[str, Any]], value: Any) -> str:
+    if not isinstance(value, dict):
+        return "missing"
+    predicate = normalize_predicate_reference(record, value.get("predicate"))
+    if predicate is None:
+        return "missing"
+    frame = value.get("frame")
+    if not isinstance(frame, str) or not frame:
+        return "missing"
+    selected = value.get("selected_complements")
+    if not isinstance(selected, list):
+        return "missing"
+    for reference in selected:
+        if not isinstance(reference, str) or reference not in objects:
+            return "missing"
+        if _ref_kind(objects, reference) not in {"phrase", "clause"}:
+            return "missing"
+    return "resolved"
+
+
 def _payload_span(record: dict[str, Any], item: dict[str, Any]) -> tuple[int, int] | None:
     """Structural span under the canonical contract: valid half-open token span
     that does not terminate at a punctuation token."""
@@ -767,7 +838,7 @@ def _collect_complementation(record: dict[str, Any], spec: DimensionSpec, scope:
                         continue
                 if not _payload_owned_in_scope(record, spec.name, (predicate,), scope):
                     continue
-                status = "resolved" if isinstance(item.get("frame"), str) and item["frame"] and isinstance(item.get("selected_complements"), list) else "missing"
+                status = _lexical_valency_status(record, objects, item)
                 accumulator.add(predicate or f"lexical_valency[{index}]", "lexical_valency", status)
     for field_name in ("complements", "adjuncts"):
         if not _has_field(spec, field_name):
@@ -1127,18 +1198,12 @@ def _collect_dependency_like(record: dict[str, Any], spec: DimensionSpec, accumu
         values = record.get(field_name)
         if isinstance(values, list):
             objects = _record_objects(record)
+            constituent_ids = _constituent_ids(record)
             for index, value in enumerate(values):
                 if field_name == "dependencies":
-                    status = "resolved" if isinstance(value, dict) and isinstance(value.get("relation"), str) and value["relation"] and isinstance(value.get("head"), str) and value["head"] in objects and isinstance(value.get("dependent"), str) and value["dependent"] in objects else "missing"
+                    status = _dependency_status(record, objects, value)
                 else:
-                    predicate = value.get("predicate") if isinstance(value, dict) else None
-                    status = "resolved" if (
-                        isinstance(value, dict)
-                        and isinstance(value.get("constituent"), str)
-                        and value["constituent"] in objects
-                        and value.get("role") in SEMANTIC_ROLES
-                        and (predicate is None or normalize_predicate_reference(record, predicate) is not None)
-                    ) else "missing"
+                    status = _semantic_role_status(record, objects, constituent_ids, value)
                 accumulator.add(f"{field_name}[{index}]", field_name, status)
     _typed_relation_items(record, spec, {"kind": "record"}, accumulator)
 
@@ -1165,7 +1230,7 @@ def _collect_valency(record: dict[str, Any], spec: DimensionSpec, scope: dict[st
             continue
         if not _payload_owned_in_scope(record, spec.name, (predicate,), scope):
             continue
-        status = "resolved" if isinstance(item.get("frame"), str) and item["frame"] and isinstance(item.get("selected_complements"), list) else "missing"
+        status = _lexical_valency_status(record, objects, item)
         accumulator.add(predicate or f"lexical_valency[{index}]", "lexical_valency", status)
 
 
