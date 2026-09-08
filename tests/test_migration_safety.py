@@ -473,6 +473,190 @@ class MigrationSafetyTests(unittest.TestCase):
                 self.assertTrue(record["migration_review_required"])
                 self.assertEqual(validate_record(record, f"alt-nested-{transform.__name__}"), [])
 
+    def _shared_ownership_record(self, transform: Any) -> dict[str, Any]:
+        record = self.legacy_record() if transform is migrate else copy.deepcopy(FIXTURE)
+        record["dependencies"] = [copy.deepcopy(DEPENDENCY)]
+        dependency_entry = next(
+            entry for entry in record["annotation_scope"]["dimensions"]
+            if entry["dimension"] == "dependencies"
+        )
+        dependency_entry["completeness"] = "partial"
+        dependency_entry["omission"] = "none"
+        dependency_entry["evidence"] = "present"
+        return record
+
+    def test_dependency_owned_argument_with_covered_dependencies_is_preserved(self) -> None:
+        argument = {"id": "a1", "kind": "subject", "target": "subj"}
+        for transform in (migrate, repair_record):
+            with self.subTest(transform=transform.__name__):
+                record = self._shared_ownership_record(transform)
+                typed = record["canonical_analysis"]["typed_analysis"]
+                typed["status"] = "established"
+                typed["arguments"] = {"a1": copy.deepcopy(argument)}
+                transform(record)
+                typed = record["canonical_analysis"]["typed_analysis"]
+                self.assertEqual(typed.get("arguments"), {"a1": argument})
+                self.assertNotIn("typed_arguments_unscoped", record.get("legacy_annotations", {}))
+                self.assertNotIn("migration_review_required", record)
+                construction_entry = next(
+                    (entry for entry in record["annotation_scope"]["dimensions"]
+                     if entry["dimension"] == "construction_relations"),
+                    None,
+                )
+                self.assertTrue(
+                    construction_entry is None
+                    or construction_entry["evidence"] != "present"
+                )
+                self.assertEqual(validate_record(record, f"shared-argument-{transform.__name__}"), [])
+
+    def test_dependency_shaped_argument_without_dependencies_coverage_is_quarantined(self) -> None:
+        argument = {"id": "a1", "kind": "subject", "target": "subj"}
+        for completeness, omission in (("unannotated", "intentional"), ("omitted", "intentional")):
+            for transform in (migrate, repair_record):
+                with self.subTest(completeness=completeness, transform=transform.__name__):
+                    record = self._shared_ownership_record(transform)
+                    dependency_entry = next(
+                        entry for entry in record["annotation_scope"]["dimensions"]
+                        if entry["dimension"] == "dependencies"
+                    )
+                    dependency_entry["completeness"] = completeness
+                    dependency_entry["omission"] = omission
+                    dependency_entry["evidence"] = "unannotated"
+                    record["dependencies"] = []
+                    typed = record["canonical_analysis"]["typed_analysis"]
+                    typed["status"] = "established"
+                    typed["arguments"] = {"a1": copy.deepcopy(argument)}
+                    transform(record)
+                    typed = record["canonical_analysis"]["typed_analysis"]
+                    self.assertNotIn("arguments", typed)
+                    self.assertEqual(record["legacy_annotations"]["typed_arguments_unscoped"], [argument])
+                    self.assertTrue(record["migration_review_required"])
+                    self.assertEqual(validate_record(record, f"uncovered-shared-argument-{transform.__name__}"), [])
+
+    def test_entity_referenced_by_covered_dependency_relation_is_cleanly_preserved(self) -> None:
+        entity = {"id": "e1", "kind": "understood_subject"}
+        relation = {
+            "id": "rel-dependency",
+            "type": "dependency",
+            "arity": "binary",
+            "status": "established",
+            "source": "word:w2",
+            "target": "analysis:e1",
+        }
+        for transform in (migrate, repair_record):
+            with self.subTest(transform=transform.__name__):
+                record = self._shared_ownership_record(transform)
+                typed = record["canonical_analysis"]["typed_analysis"]
+                typed["status"] = "established"
+                typed["relations"] = [copy.deepcopy(relation)]
+                typed["entities"] = [copy.deepcopy(entity)]
+                transform(record)
+                typed = record["canonical_analysis"]["typed_analysis"]
+                self.assertEqual(typed["entities"], [entity])
+                self.assertEqual(typed["relations"], [relation])
+                self.assertNotIn("typed_entity_unscoped", record.get("legacy_annotations", {}))
+                self.assertNotIn("migration_review_required", record)
+                self.assertEqual(validate_record(record, f"covered-entity-protection-{transform.__name__}"), [])
+
+    def test_relation_existence_alone_does_not_cleanly_protect_entity(self) -> None:
+        entity = {"id": "e1", "kind": "understood_subject"}
+        relation = {
+            "id": "rel-extension",
+            "type": "pedagogical:object",
+            "arity": "binary",
+            "status": "established",
+            "source": "word:w2",
+            "target": "analysis:e1",
+        }
+        for transform in (migrate, repair_record):
+            with self.subTest(transform=transform.__name__):
+                record = self.legacy_record() if transform is migrate else copy.deepcopy(FIXTURE)
+                typed = record["canonical_analysis"]["typed_analysis"]
+                typed["status"] = "established"
+                typed["relations"] = [copy.deepcopy(relation)]
+                typed["entities"] = [copy.deepcopy(entity)]
+                transform(record)
+                typed = record["canonical_analysis"]["typed_analysis"]
+                self.assertEqual(typed["entities"], [entity])
+                self.assertTrue(record["migration_review_required"])
+                self.assertNotIn("construction_relations", [
+                    entry["dimension"] for entry in record["annotation_scope"]["dimensions"]
+                    if entry.get("evidence") == "present"
+                ])
+                self.assertEqual(validate_record(record, f"unowned-entity-reference-{transform.__name__}"), [])
+
+    def test_mixed_shared_and_construction_only_nested_items_split_by_ownership(self) -> None:
+        dependency_argument = {"id": "a_dep", "relation": "obj", "head": "w2", "dependent": "obj"}
+        construction_only_argument = {"role": "Agent"}
+        referenced_entity = {"id": "e_dep", "kind": "understood_subject"}
+        unreferenced_entity = {"id": "e_cons", "kind": "clause"}
+        relation = {
+            "id": "rel-dependency",
+            "type": "dependency",
+            "arity": "binary",
+            "status": "established",
+            "source": "word:w2",
+            "target": "analysis:e_dep",
+        }
+        for transform in (migrate, repair_record):
+            with self.subTest(transform=transform.__name__):
+                record = self._shared_ownership_record(transform)
+                typed = record["canonical_analysis"]["typed_analysis"]
+                typed["status"] = "established"
+                typed["arguments"] = {
+                    "a_dep": copy.deepcopy(dependency_argument),
+                    "a_cons": copy.deepcopy(construction_only_argument),
+                }
+                typed["entities"] = [copy.deepcopy(referenced_entity), copy.deepcopy(unreferenced_entity)]
+                typed["relations"] = [copy.deepcopy(relation)]
+                transform(record)
+                typed = record["canonical_analysis"]["typed_analysis"]
+                self.assertEqual(typed.get("arguments"), {"a_dep": dependency_argument})
+                self.assertEqual(typed.get("entities"), [referenced_entity])
+                self.assertEqual(typed.get("relations"), [relation])
+                self.assertEqual(record["legacy_annotations"]["typed_arguments_unscoped"], [construction_only_argument])
+                self.assertEqual(record["legacy_annotations"]["typed_entity_unscoped"], [unreferenced_entity])
+                self.assertTrue(record["migration_review_required"])
+                self.assertEqual(validate_record(record, f"mixed-ownership-{transform.__name__}"), [])
+
+    def test_cross_analysis_relation_reference_does_not_protect_entity(self) -> None:
+        entity = {"id": "e1", "kind": "clause"}
+        relation = {
+            "id": "rel-dependency",
+            "type": "dependency",
+            "arity": "binary",
+            "status": "established",
+            "source": "word:w2",
+            "target": "analysis:e1",
+        }
+        for transform in (migrate, repair_record):
+            with self.subTest(transform=transform.__name__):
+                record = self._shared_ownership_record(transform)
+                canonical_typed = record["canonical_analysis"]["typed_analysis"]
+                canonical_typed["status"] = "established"
+                canonical_typed["entities"] = [copy.deepcopy(entity)]
+                record["alternative_analyses"] = [{
+                    "id": "alt-1",
+                    "framework": "CGEL",
+                    "status": "established",
+                    "typed_analysis": {
+                        "kind": "record_level_analysis",
+                        "framework": "CGEL",
+                        "status": "established",
+                        "relations": [copy.deepcopy(relation)],
+                        "entities": [copy.deepcopy(entity)],
+                    },
+                }]
+                transform(record)
+                canonical_typed = record["canonical_analysis"]["typed_analysis"]
+                alternative_typed = record["alternative_analyses"][0]["typed_analysis"]
+                self.assertEqual(canonical_typed["entities"], [])
+                self.assertEqual(alternative_typed["entities"], [entity])
+                self.assertEqual(alternative_typed["relations"], [relation])
+                self.assertEqual(record["legacy_annotations"]["typed_entity_unscoped"], [entity])
+                self.assertTrue(record["migration_review_required"])
+                self.assertEqual(validate_record(record, f"cross-analysis-{transform.__name__}"), [])
+
     def test_migration_downgrades_complete_intentional_unannotated(self) -> None:
         record = self.migrate_with([
             declaration("dependencies", {"kind": "record"}, "complete", "intentional", "unannotated"),

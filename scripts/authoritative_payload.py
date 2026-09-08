@@ -22,9 +22,9 @@ except ImportError:
     from scripts.data_common import LEXICAL_CATEGORIES, PHRASE_CATEGORIES, SEMANTIC_ROLES
 
 try:
-    from dimension_registry import DimensionSpec, PayloadSpec, dimension_spec
+    from dimension_registry import DIMENSION_REGISTRY, DimensionSpec, PayloadSpec, dimension_spec
 except ImportError:
-    from scripts.dimension_registry import DimensionSpec, PayloadSpec, dimension_spec
+    from scripts.dimension_registry import DIMENSION_REGISTRY, DimensionSpec, PayloadSpec, dimension_spec
 
 
 class AuthoritativePayloadState(str, Enum):
@@ -657,13 +657,68 @@ def _construction_payload_item_status(record: dict[str, Any], field_name: str, v
     return "missing"
 
 
-def _typed_reference_namespace_pair(reference: Any) -> tuple[Any, Any]:
-    if isinstance(reference, str) and ":" in reference:
-        namespace, identifier = reference.split(":", 1)
-        return namespace, identifier
-    if isinstance(reference, dict):
-        return reference.get("namespace"), reference.get("id")
-    return None, None
+CONSTRUCTION_RELATION_DIMENSION = "construction_relations"
+
+_NESTED_GOVERNANCE_KEYS = frozenset({"status", "notes", "note"})
+
+
+def construction_typed_relation_types() -> frozenset[str]:
+    """Return the typed relation types the registry declares construction-owned."""
+    spec = dimension_spec(CONSTRUCTION_RELATION_DIMENSION)
+    if spec is None:
+        return frozenset()
+    relation_types: set[str] = set()
+    for payload in spec.payloads:
+        if payload.field == "typed_relation":
+            relation_types.update(payload.relation_types)
+    return frozenset(relation_types)
+
+
+def typed_relation_owner_dimensions(relation_type: Any) -> frozenset[str]:
+    """Return registry dimensions other than construction that own one typed relation type."""
+    if not isinstance(relation_type, str) or not relation_type:
+        return frozenset()
+    return frozenset(
+        spec.name
+        for spec in DIMENSION_REGISTRY.values()
+        if spec.name != CONSTRUCTION_RELATION_DIMENSION
+        for payload in spec.payloads
+        if payload.field == "typed_relation" and relation_type in payload.relation_types
+    )
+
+
+def typed_argument_owner_dimensions(argument: Any) -> frozenset[str]:
+    """Return registry dimensions other than construction whose typed_arguments ownership covers this item.
+
+    Ownership requires that every linguistic property of the nested argument falls
+    inside the dimension's declared ``typed_arguments`` property set; a mere field
+    listing is not treated as participation evidence.
+    """
+    if not isinstance(argument, dict):
+        return frozenset()
+    properties = {key for key in argument if key not in _NESTED_GOVERNANCE_KEYS}
+    if not properties:
+        return frozenset()
+    return frozenset(
+        spec.name
+        for spec in DIMENSION_REGISTRY.values()
+        if spec.name != CONSTRUCTION_RELATION_DIMENSION
+        for payload in spec.payloads
+        if payload.field == "typed_arguments" and properties <= payload.properties
+    )
+
+
+def typed_analysis_relation_entries(record: dict[str, Any]) -> list[tuple[tuple[str | int, ...], dict[str, Any]]]:
+    """Return every typed relation paired with its analysis-local container path."""
+    entries: list[tuple[tuple[str | int, ...], dict[str, Any]]] = []
+    for analysis_path, typed in _typed_analysis_paths(record):
+        relations = typed.get("relations")
+        if not isinstance(relations, list):
+            continue
+        for relation in relations:
+            if isinstance(relation, dict):
+                entries.append((analysis_path, relation))
+    return entries
 
 
 def _typed_nested_status(typed: dict[str, Any], value: Any) -> str:
@@ -681,22 +736,6 @@ def _typed_entity_status(typed: dict[str, Any], entity: Any) -> str:
     if not isinstance(entity, dict) or not isinstance(entity.get("id"), str) or not entity["id"] or not isinstance(entity.get("kind"), str) or not entity["kind"]:
         return "missing"
     return _typed_nested_status(typed, entity)
-
-
-def _non_construction_referenced_entity_ids(typed: dict[str, Any], relation_types: set[str]) -> set[str]:
-    """Collect entity ids referenced by relations outside the construction-owned types."""
-    referenced: set[str] = set()
-    relations = typed.get("relations")
-    if not isinstance(relations, list):
-        return referenced
-    for relation in relations:
-        if not isinstance(relation, dict) or relation.get("type") in relation_types:
-            continue
-        for key in ("source", "target"):
-            namespace, identifier = _typed_reference_namespace_pair(relation.get(key))
-            if namespace == "analysis" and isinstance(identifier, str) and identifier:
-                referenced.add(identifier)
-    return referenced
 
 
 def _typed_argument_entries(
@@ -733,7 +772,6 @@ def _typed_argument_entries(
 def _typed_entity_entries(
     typed: dict[str, Any],
     analysis_path: tuple[str | int, ...],
-    preserved_ids: set[str],
 ) -> list[tuple[str, Any, tuple[str | int, ...]]]:
     entries: list[tuple[str, Any, tuple[str | int, ...]]] = []
     if "entities" not in typed or typed.get("entities") is None:
@@ -741,8 +779,6 @@ def _typed_entity_entries(
     entities = typed["entities"]
     if isinstance(entities, list):
         for index, entity in enumerate(entities):
-            if isinstance(entity, dict) and isinstance(entity.get("id"), str) and entity["id"] in preserved_ids:
-                continue
             identifier = entity.get("id") if isinstance(entity, dict) and isinstance(entity.get("id"), str) and entity["id"] else f"typed_entity[{index}]"
             entries.append((identifier, entity, analysis_path + ("entities", index)))
     elif entities not in (None, {}, []):
@@ -793,8 +829,7 @@ def _construction_typed_payload_items(
                     path=path,
                 ))
         if _has_field(spec, "typed_entity"):
-            preserved_ids = _non_construction_referenced_entity_ids(typed, relation_types)
-            for identifier, value, path in _typed_entity_entries(typed, analysis_path, preserved_ids):
+            for identifier, value, path in _typed_entity_entries(typed, analysis_path):
                 items.append(AuthoritativePayloadItem(
                     field="typed_entity",
                     identifier=identifier,

@@ -11,6 +11,10 @@ from scripts.authoritative_payload import (
     authoritative_payload,
     authoritative_payload_items,
     authoritative_payload_state,
+    construction_typed_relation_types,
+    typed_analysis_relation_entries,
+    typed_argument_owner_dimensions,
+    typed_relation_owner_dimensions,
 )
 from scripts.data_common import read_jsonl
 from scripts.coverage_resolution import resolve_scoring_eligibility
@@ -288,12 +292,69 @@ class AuthoritativePayloadContractTests(unittest.TestCase):
         for item in items:
             by_field.setdefault(item.field, set()).add(item.identifier)
         self.assertEqual(by_field.get("typed_arguments"), {"typed_arguments[a1]"})
-        self.assertEqual(by_field.get("typed_entity"), {"e1"})
+        self.assertEqual(by_field.get("typed_entity"), {"e1", "e2"})
         self.assertEqual(by_field.get("typed_relation"), {"rel-entity-ref"})
         argument = next(item for item in items if item.field == "typed_arguments")
         self.assertEqual(argument.path, ("canonical_analysis", "typed_analysis", "arguments", "a1"))
         self.assertEqual(argument.status, "resolved")
         self.assertEqual(authoritative_payload_items(record, "dependencies"), ())
+
+    def test_registry_helpers_report_shared_nested_payload_ownership(self) -> None:
+        self.assertEqual(
+            typed_argument_owner_dimensions({"id": "a1", "kind": "subject", "target": "subj"}),
+            {"dependencies"},
+        )
+        self.assertEqual(
+            typed_argument_owner_dimensions({"relation": "obj", "head": "w2", "dependent": "obj"}),
+            {"dependencies", "vp_complementation"},
+        )
+        self.assertEqual(typed_argument_owner_dimensions({"role": "Agent"}), {"semantic_roles"})
+        self.assertEqual(typed_argument_owner_dimensions({"category": "noun"}), {
+            "lexical_category", "phrase_constituency", "constituency", "np_internal_constituency",
+        })
+        self.assertEqual(typed_argument_owner_dimensions({"function": "object"}), {"syntactic_function"})
+        self.assertEqual(typed_argument_owner_dimensions({"construction_frame": "x"}), frozenset())
+        self.assertEqual(typed_argument_owner_dimensions("literal"), frozenset())
+        self.assertEqual(typed_relation_owner_dimensions("dependency"), {"dependencies"})
+        self.assertEqual(typed_relation_owner_dimensions("selection"), {"vp_complementation"})
+        self.assertEqual(typed_relation_owner_dimensions("construction"), frozenset())
+        self.assertEqual(typed_relation_owner_dimensions("pedagogical:object"), frozenset())
+        self.assertIn("construction", construction_typed_relation_types())
+        self.assertNotIn("dependency", construction_typed_relation_types())
+
+    def test_typed_analysis_relation_entries_are_analysis_local(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        canonical_relation = {
+            "id": "rel-canonical",
+            "type": "dependency",
+            "arity": "binary",
+            "source": "word:w2",
+            "target": "analysis:e1",
+        }
+        alternative_relation = {
+            "id": "rel-alternative",
+            "type": "pedagogical:object",
+            "arity": "binary",
+            "source": "word:w2",
+            "target": "analysis:e1",
+        }
+        record["canonical_analysis"]["typed_analysis"]["relations"] = [canonical_relation]
+        record["alternative_analyses"] = [{
+            "id": "alt-1",
+            "framework": "CGEL",
+            "status": "established",
+            "typed_analysis": {
+                "kind": "record_level_analysis",
+                "framework": "CGEL",
+                "status": "established",
+                "relations": [alternative_relation],
+            },
+        }]
+        entries = typed_analysis_relation_entries(record)
+        self.assertEqual(entries, [
+            (("canonical_analysis", "typed_analysis"), canonical_relation),
+            (("alternative_analyses", 0, "typed_analysis"), alternative_relation),
+        ])
 
     def test_typed_arguments_container_forms_are_enumerated(self) -> None:
         base = copy.deepcopy(FIXTURE)

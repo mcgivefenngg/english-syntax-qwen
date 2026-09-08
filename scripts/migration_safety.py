@@ -8,11 +8,25 @@ from typing import Any
 try:
     from collection_contract import collection_item_in_scope, normalize_collection_item, validate_coverage_target
     from dimension_registry import DIMENSION_REGISTRY, dimension_spec
-    from authoritative_payload import authoritative_payload, authoritative_payload_items
+    from authoritative_payload import (
+        authoritative_payload,
+        authoritative_payload_items,
+        construction_typed_relation_types,
+        typed_analysis_relation_entries,
+        typed_argument_owner_dimensions,
+        typed_relation_owner_dimensions,
+    )
 except ImportError:
     from scripts.collection_contract import collection_item_in_scope, normalize_collection_item, validate_coverage_target
     from scripts.dimension_registry import DIMENSION_REGISTRY, dimension_spec
-    from scripts.authoritative_payload import authoritative_payload, authoritative_payload_items
+    from scripts.authoritative_payload import (
+        authoritative_payload,
+        authoritative_payload_items,
+        construction_typed_relation_types,
+        typed_analysis_relation_entries,
+        typed_argument_owner_dimensions,
+        typed_relation_owner_dimensions,
+    )
 
 
 _COMPLETENESS = {"complete", "partial", "unannotated", "omitted", "out_of_scope"}
@@ -341,7 +355,9 @@ def quarantine_uncovered_collection_content(
             if entry.get("dimension") == "construction_relations"
         ]
         covered_paths: set[tuple[str | int, ...]] = set()
+        protected_paths: set[tuple[str | int, ...]] = set()
         uncovered_by_field: dict[str, list[Any]] = {}
+        shared_ownership_review = False
 
         def entry_covered(item: Any) -> bool:
             return any(
@@ -354,6 +370,31 @@ def quarantine_uncovered_collection_content(
                 if isinstance(entry.get("scope"), dict)
             )
 
+        positive_record_dimensions: set[str] = set()
+        positive_scoped_dimensions: set[str] = set()
+        for entry in dimensions:
+            scope = entry.get("scope")
+            if not isinstance(scope, dict):
+                continue
+            if (
+                entry.get("omission") == "none"
+                and entry.get("completeness") not in _EXCLUDED_COMPLETENESS
+                and entry.get("evidence") == "present"
+            ):
+                if scope.get("kind") == "record":
+                    positive_record_dimensions.add(entry.get("dimension"))
+                elif scope.get("kind") in {"node", "region"}:
+                    positive_scoped_dimensions.add(entry.get("dimension"))
+
+        def owner_protection(owners: Any) -> str | None:
+            if not owners:
+                return None
+            if owners & positive_record_dimensions:
+                return "clean"
+            if owners & positive_scoped_dimensions:
+                return "review"
+            return None
+
         covered_entity_refs: dict[tuple[str | int, ...], set[str]] = {}
         for item in construction_items:
             if item.field == "typed_entity":
@@ -364,9 +405,37 @@ def quarantine_uncovered_collection_content(
                     covered_entity_refs.setdefault(item.path[:-2], set()).update(
                         _analysis_referenced_entity_ids([item.value])
                     )
-            else:
-                uncovered_by_field.setdefault(item.field, []).append(item.value)
-                review_required = True
+                continue
+            if item.field == "typed_arguments":
+                protection = owner_protection(typed_argument_owner_dimensions(item.value))
+                if protection == "clean" and item.status == "resolved":
+                    protected_paths.add(item.path)
+                    continue
+                if protection is not None:
+                    protected_paths.add(item.path)
+                    shared_ownership_review = True
+                    continue
+            uncovered_by_field.setdefault(item.field, []).append(item.value)
+            review_required = True
+
+        entity_reference_states: dict[tuple[str | int, ...], dict[str, str]] = {}
+        construction_relation_types = construction_typed_relation_types()
+        for analysis_path, relation in typed_analysis_relation_entries(record):
+            if relation.get("type") in construction_relation_types:
+                continue
+            references = _analysis_referenced_entity_ids([relation])
+            if not references:
+                continue
+            protection = owner_protection(typed_relation_owner_dimensions(relation.get("type")))
+            # Fail closed: the referencing relation survives construction
+            # quarantine, so removing its target entity would create a dangling
+            # canonical reference. Coverage from the owning dimension is still
+            # required for clean protection; otherwise preserve with review.
+            state = "clean" if protection == "clean" else "review"
+            bucket = entity_reference_states.setdefault(analysis_path, {})
+            for reference in references:
+                if bucket.get(reference) != "clean":
+                    bucket[reference] = state
         for item in construction_items:
             if item.field != "typed_entity":
                 continue
@@ -377,7 +446,18 @@ def quarantine_uncovered_collection_content(
             if isinstance(item.value, dict) and item.value.get("id") in covered_entity_refs.get(analysis_path, set()):
                 covered_paths.add(item.path)
                 continue
+            reference = item.value.get("id") if isinstance(item.value, dict) else None
+            state = entity_reference_states.get(analysis_path, {}).get(reference) if isinstance(reference, str) else None
+            if state == "clean":
+                protected_paths.add(item.path)
+                continue
+            if state == "review":
+                protected_paths.add(item.path)
+                shared_ownership_review = True
+                continue
             uncovered_by_field.setdefault(item.field, []).append(item.value)
+            review_required = True
+        if shared_ownership_review:
             review_required = True
 
         for field, values in uncovered_by_field.items():
@@ -436,7 +516,10 @@ def quarantine_uncovered_collection_content(
             if not isinstance(parent, dict):
                 continue
             current = parent.get(container_key)
-            uncovered_paths = {item.path for item in values if item.path not in covered_paths}
+            uncovered_paths = {
+                item.path for item in values
+                if item.path not in covered_paths and item.path not in protected_paths
+            }
             whole_container_path = analysis_path + (container_key,)
             if any(item.path == whole_container_path for item in values):
                 if whole_container_path in uncovered_paths:
