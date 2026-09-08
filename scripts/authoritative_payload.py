@@ -384,6 +384,45 @@ def _optional_typed_reference(objects: dict[str, dict[str, Any]], item: dict[str
     return _ref_kind(objects, item[field]) in kinds
 
 
+_VALID_REALIZATION_RELATIONS = frozenset({"same_span_alias", "expanded_realization", "other"})
+
+
+def _clause_span(record: dict[str, Any], clause_ref: str) -> tuple[int, int] | None:
+    clauses = record.get("clauses")
+    if not isinstance(clauses, list):
+        return None
+    for clause in clauses:
+        if isinstance(clause, dict) and clause.get("id") == clause_ref:
+            return _item_span(record, clause)
+    return None
+
+
+def _clause_wrapper_realization_is_valid(
+    record: dict[str, Any],
+    item: dict[str, Any],
+    wrapper_span: tuple[int, int],
+) -> bool:
+    clause_ref = item.get("clause_ref")
+    realization = item.get("realization")
+    if not isinstance(realization, dict):
+        return False
+    if realization.get("clause_ref") != clause_ref:
+        return False
+    relation = realization.get("relation")
+    if relation not in _VALID_REALIZATION_RELATIONS:
+        return False
+    if "span_relation" in item and item.get("span_relation") != relation:
+        return False
+    clause_sp = _clause_span(record, clause_ref)
+    if clause_sp is None:
+        return False
+    if relation == "same_span_alias" and wrapper_span != clause_sp:
+        return False
+    if relation == "expanded_realization" and not (wrapper_span[0] <= clause_sp[0] and wrapper_span[1] >= clause_sp[1]):
+        return False
+    return True
+
+
 def _constituent_status(record: dict[str, Any], item: dict[str, Any]) -> str:
     """Canonical payload status for one constituent-family node.
 
@@ -394,7 +433,8 @@ def _constituent_status(record: dict[str, Any], item: dict[str, Any]) -> str:
     """
     if not isinstance(item.get("id"), str) or not item.get("id"):
         return "missing"
-    if _payload_span(record, item) is None:
+    wrapper_span = _payload_span(record, item)
+    if wrapper_span is None:
         return "missing"
     objects = _record_objects(record)
     node_kind = item.get("node_kind")
@@ -408,11 +448,8 @@ def _constituent_status(record: dict[str, Any], item: dict[str, Any]) -> str:
         clause_ref = item.get("clause_ref")
         if not isinstance(clause_ref, str) or clause_ref not in _clause_ids(record):
             return "missing"
-        if "span_relation" in item:
-            realization = item.get("realization")
-            relation = realization.get("relation") if isinstance(realization, dict) else None
-            if item.get("span_relation") != relation:
-                return "missing"
+        if not _clause_wrapper_realization_is_valid(record, item, wrapper_span):
+            return "missing"
     else:
         return "missing"
     if not _optional_typed_reference(objects, item, "head", {"word"}):

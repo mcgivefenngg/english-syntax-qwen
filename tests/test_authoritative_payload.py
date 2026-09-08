@@ -718,6 +718,158 @@ class CanonicalNodePayloadIntegrityTests(unittest.TestCase):
         self.assertFalse(decision.scoreable)
         self.assertIsNone(decision.coverage_state)
 
+    def test_valid_same_span_alias_wrapper_remains_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["constituents"].append(self.clause_wrapper(
+            "c0",
+            span={"start": 0, "end": 5},
+            realization={"clause_ref": "c0", "relation": "same_span_alias"},
+            span_relation="same_span_alias",
+        ))
+        self.assertEqual(validate_record(record, "valid-same-span"), [])
+        payload = authoritative_payload(record, "phrase_constituency", "emb")
+        self.assertIs(payload.state, AuthoritativePayloadState.PRESENT)
+        self.assertTrue(payload.fully_resolved)
+
+    def test_same_span_alias_with_unequal_spans_is_not_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["constituents"].append(self.clause_wrapper(
+            "c0",
+            span={"start": 1, "end": 5},
+            realization={"clause_ref": "c0", "relation": "same_span_alias"},
+            span_relation="same_span_alias",
+        ))
+        self.assertTrue(any("same_span_alias" in e for e in validate_record(record, "unequal-same-span")))
+        self.assert_not_resolved(record, "phrase_constituency", "emb")
+
+    def test_valid_expanded_realization_wrapper_remains_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["constituents"].append(self.clause_wrapper(
+            "c0",
+            span={"start": 0, "end": 5},
+            realization={"clause_ref": "c0", "relation": "expanded_realization"},
+            span_relation="expanded_realization",
+        ))
+        self.assertEqual(validate_record(record, "valid-expanded"), [])
+        payload = authoritative_payload(record, "phrase_constituency", "emb")
+        self.assertIs(payload.state, AuthoritativePayloadState.PRESENT)
+        self.assertTrue(payload.fully_resolved)
+
+    def test_expanded_realization_not_containing_clause_span_is_not_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["constituents"].append(self.clause_wrapper(
+            "c0",
+            span={"start": 4, "end": 5},
+            realization={"clause_ref": "c0", "relation": "expanded_realization"},
+            span_relation="expanded_realization",
+        ))
+        self.assertTrue(any("expanded_realization" in e for e in validate_record(record, "bad-expanded")))
+        self.assert_not_resolved(record, "phrase_constituency", "emb")
+
+    def test_valid_other_wrapper_remains_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["constituents"].append(self.clause_wrapper("c0"))
+        self.assertEqual(validate_record(record, "valid-other"), [])
+        payload = authoritative_payload(record, "phrase_constituency", "emb")
+        self.assertIs(payload.state, AuthoritativePayloadState.PRESENT)
+        self.assertTrue(payload.fully_resolved)
+
+    def test_missing_realization_object_is_not_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        wrapper: dict[str, Any] = {
+            "id": "emb",
+            "node_kind": "clause",
+            "clause_ref": "c0",
+            "span": {"start": 0, "end": 5},
+            "function": "complement",
+        }
+        record["constituents"].append(wrapper)
+        self.assertTrue(any("realization" in e for e in validate_record(record, "no-realization")))
+        self.assert_not_resolved(record, "phrase_constituency", "emb")
+
+    def test_realization_clause_ref_disagrees_is_not_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["clauses"].append(self.subordinate_clause())
+        record["constituents"].append(self.clause_wrapper(
+            "c0",
+            realization={"clause_ref": "c1", "relation": "other"},
+        ))
+        self.assertTrue(any("realization.clause_ref must agree" in e for e in validate_record(record, "disagree-ref")))
+        self.assert_not_resolved(record, "phrase_constituency", "emb")
+
+    def test_invalid_realization_relation_is_not_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["constituents"].append(self.clause_wrapper(
+            "c0",
+            realization={"clause_ref": "c0", "relation": "bogus"},
+        ))
+        self.assertTrue(any("realization relation is invalid" in e for e in validate_record(record, "bad-relation")))
+        self.assert_not_resolved(record, "phrase_constituency", "emb")
+
+    def test_span_relation_mismatch_remains_not_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["constituents"].append(self.clause_wrapper(
+            "c0",
+            span_relation="same_span_alias",
+        ))
+        self.assertTrue(any("span_relation must agree" in e for e in validate_record(record, "mismatch")))
+        self.assert_not_resolved(record, "phrase_constituency", "emb")
+
+    def test_invalid_clause_wrapper_target_is_not_scoreable(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["constituents"].append(self.clause_wrapper(
+            "c0",
+            span={"start": 1, "end": 5},
+            realization={"clause_ref": "c0", "relation": "same_span_alias"},
+            span_relation="same_span_alias",
+        ))
+        decision = resolve_scoring_eligibility(record, "phrase_constituency", "emb")
+        self.assertFalse(decision.scoreable)
+
+    def test_renderer_does_not_emit_invalid_phrase_constituency_properties(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["constituents"].append(self.clause_wrapper(
+            "c0",
+            span={"start": 1, "end": 5},
+            realization={"clause_ref": "c0", "relation": "same_span_alias"},
+            span_relation="same_span_alias",
+        ))
+        projection = linguistic_projection(record)
+        projected_constituents = {c["id"]: c for c in (projection.get("constituents") or [])}
+        self.assertIn("emb", projected_constituents)
+        self.assertNotIn("phrase_category", projected_constituents["emb"])
+        self.assertNotIn("span_relation", projected_constituents["emb"])
+
+    def test_unrelated_valid_constituent_remains_positive(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["constituents"].append(self.clause_wrapper(
+            "c0",
+            span={"start": 1, "end": 5},
+            realization={"clause_ref": "c0", "relation": "same_span_alias"},
+            span_relation="same_span_alias",
+        ))
+        valid = authoritative_payload(record, "phrase_constituency", "subj")
+        invalid = authoritative_payload(record, "phrase_constituency", "emb")
+        self.assertIs(valid.state, AuthoritativePayloadState.PRESENT)
+        self.assertTrue(valid.fully_resolved)
+        self.assertIs(invalid.state, AuthoritativePayloadState.ABSENT)
+        self.assertFalse(invalid.has_resolved_content)
+
+    def test_record_complete_with_invalid_clause_wrapper_is_present_not_fully_resolved(self) -> None:
+        record = with_declaration(FIXTURE, declaration("phrase_constituency", {"kind": "record"}))
+        record["constituents"].append(self.clause_wrapper(
+            "c0",
+            span={"start": 1, "end": 5},
+            realization={"clause_ref": "c0", "relation": "same_span_alias"},
+            span_relation="same_span_alias",
+        ))
+        payload = authoritative_payload(record, "phrase_constituency")
+        self.assertIs(payload.state, AuthoritativePayloadState.PRESENT)
+        self.assertFalse(payload.fully_resolved)
+        self.assertGreater(payload.missing_count, 0)
+        decision = resolve_scoring_eligibility(record, "phrase_constituency")
+        self.assertFalse(decision.scoreable)
+
 
 if __name__ == "__main__":
     unittest.main()
