@@ -48,6 +48,21 @@ try:
 except ImportError:
     from scripts.dimension_registry import DIMENSION_REGISTRY, DimensionSpec, PayloadSpec, dimension_spec
 
+try:
+    from typed_relation_contract import (
+        validate_typed_relation_structure,
+        validate_typed_analysis_container,
+        get_analysis_entity_ids,
+        CANONICAL_SCALAR_RELATION_TYPES,
+    )
+except ImportError:
+    from scripts.typed_relation_contract import (
+        validate_typed_relation_structure,
+        validate_typed_analysis_container,
+        get_analysis_entity_ids,
+        CANONICAL_SCALAR_RELATION_TYPES,
+    )
+
 
 class AuthoritativePayloadState(str, Enum):
     PRESENT = "present"
@@ -657,13 +672,40 @@ def _typed_analyses(record: dict[str, Any]) -> list[tuple[dict[str, Any], dict[s
     return analyses
 
 
-def _typed_relation_status(typed: dict[str, Any], relation: dict[str, Any]) -> str:
-    status = relation.get("status", typed.get("status"))
-    if status in {"descriptive", "established"}:
-        return "resolved"
-    if status in {"unresolved", "review_required"}:
-        return "unresolved"
-    return "missing"
+def _typed_relation_status(
+    record: dict[str, Any],
+    typed: dict[str, Any],
+    relation: dict[str, Any],
+    *,
+    relation_id_occurrences: dict[str, int] | None = None,
+) -> str:
+    """Comprehensive typed relation status with structural validation.
+
+    A1c: Validator-invalid typed relations must not be classified as resolved.
+    """
+    if not isinstance(relation, dict):
+        return "missing"
+
+    # Check container validity first
+    if not validate_typed_analysis_container(typed):
+        return "missing"
+
+    # Check for duplicate relation IDs
+    relation_id = relation.get("id")
+    if isinstance(relation_id, str) and relation_id_occurrences is not None:
+        if relation_id_occurrences.get(relation_id, 0) > 1:
+            return "missing"
+
+    # Get analysis-local entity IDs for reference validation
+    analysis_entity_ids = get_analysis_entity_ids(typed)
+
+    # Use the comprehensive structural validation
+    return validate_typed_relation_structure(
+        relation,
+        typed,
+        record,
+        analysis_entity_ids=analysis_entity_ids,
+    )
 
 
 def _typed_relation_items(
@@ -676,6 +718,19 @@ def _typed_relation_items(
     relation_types = set().union(*(payload.relation_types for payload in relation_specs)) if relation_specs else set()
     if not relation_types:
         return
+
+    # Compute relation ID occurrences across all analyses for duplicate detection
+    relation_id_occurrences: dict[str, int] = {}
+    for typed, _analysis in _typed_analyses(record):
+        relations = typed.get("relations")
+        if not isinstance(relations, list):
+            continue
+        for relation in relations:
+            if isinstance(relation, dict):
+                relation_id = relation.get("id")
+                if isinstance(relation_id, str) and relation_id:
+                    relation_id_occurrences[relation_id] = relation_id_occurrences.get(relation_id, 0) + 1
+
     for typed, _analysis in _typed_analyses(record):
         relations = typed.get("relations")
         if not isinstance(relations, list):
@@ -694,7 +749,12 @@ def _typed_relation_items(
             if not _payload_owned_in_scope(record, spec.name, references, scope):
                 continue
             identifier = relation.get("id") if isinstance(relation.get("id"), str) else f"typed_relation[{index}]"
-            status = _typed_relation_status(typed, relation)
+            status = _typed_relation_status(
+                record,
+                typed,
+                relation,
+                relation_id_occurrences=relation_id_occurrences,
+            )
             accumulator.add(identifier, "typed_relation", status)
 
 
@@ -1032,6 +1092,32 @@ def _typed_entity_status(typed: dict[str, Any], entity: Any) -> str:
     return _typed_nested_status(typed, entity)
 
 
+def _typed_entity_status_with_duplicates(
+    typed: dict[str, Any],
+    entity: Any,
+    entity_id_occurrences: dict[str, int],
+) -> str:
+    """Entity status with duplicate ID detection.
+
+    A1c: Duplicate entity IDs within the same typed analysis must not be clean resolved authority.
+    """
+    if not isinstance(entity, dict):
+        return "missing"
+
+    entity_id = entity.get("id")
+    if not isinstance(entity_id, str) or not entity_id:
+        return "missing"
+
+    # Check for duplicate entity IDs
+    if entity_id_occurrences.get(entity_id, 0) > 1:
+        return "missing"
+
+    if not isinstance(entity.get("kind"), str) or not entity["kind"]:
+        return "missing"
+
+    return _typed_nested_status(typed, entity)
+
+
 def _typed_argument_entries(
     typed: dict[str, Any],
     spec: DimensionSpec,
@@ -1090,6 +1176,19 @@ def _construction_typed_payload_items(
         if payload.field == "typed_relation" and payload.relation_types
     ]
     relation_types = set().union(*(payload.relation_types for payload in relation_specs)) if relation_specs else set()
+
+    # Compute relation ID occurrences across all analyses for duplicate detection
+    relation_id_occurrences: dict[str, int] = {}
+    for _analysis_path, typed in _typed_analysis_paths(record):
+        relations = typed.get("relations")
+        if not isinstance(relations, list):
+            continue
+        for relation in relations:
+            if isinstance(relation, dict):
+                relation_id = relation.get("id")
+                if isinstance(relation_id, str) and relation_id:
+                    relation_id_occurrences[relation_id] = relation_id_occurrences.get(relation_id, 0) + 1
+
     for analysis_path, typed in _typed_analysis_paths(record):
         if relation_types and _has_field(spec, "typed_relation"):
             relations = typed.get("relations")
@@ -1102,7 +1201,12 @@ def _construction_typed_payload_items(
                         field="typed_relation",
                         identifier=identifier,
                         value=relation,
-                        status=_typed_relation_status(typed, relation),
+                        status=_typed_relation_status(
+                            record,
+                            typed,
+                            relation,
+                            relation_id_occurrences=relation_id_occurrences,
+                        ),
                         path=analysis_path + ("relations", index),
                     ))
             elif relations not in (None, {}, []):
@@ -1123,12 +1227,23 @@ def _construction_typed_payload_items(
                     path=path,
                 ))
         if _has_field(spec, "typed_entity"):
+            # Compute entity ID occurrences for duplicate detection
+            entity_id_occurrences: dict[str, int] = {}
+            entities = typed.get("entities")
+            if isinstance(entities, list):
+                for entity in entities:
+                    if isinstance(entity, dict):
+                        entity_id = entity.get("id")
+                        if isinstance(entity_id, str) and entity_id:
+                            entity_id_occurrences[entity_id] = entity_id_occurrences.get(entity_id, 0) + 1
+
             for identifier, value, path in _typed_entity_entries(typed, analysis_path):
+                status = _typed_entity_status_with_duplicates(typed, value, entity_id_occurrences)
                 items.append(AuthoritativePayloadItem(
                     field="typed_entity",
                     identifier=identifier,
                     value=value,
-                    status=_typed_entity_status(typed, value),
+                    status=status,
                     path=path,
                 ))
     return items

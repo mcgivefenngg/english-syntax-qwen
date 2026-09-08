@@ -10,9 +10,9 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from coverage_resolution import CoverageResolutionError, CoverageState, collection_item_coverage_state, resolve_coverage
+    from coverage_resolution import CoverageResolutionError, CoverageState, collection_item_coverage_state, resolve_coverage, declared_coverage_state
 except ImportError:
-    from scripts.coverage_resolution import CoverageResolutionError, CoverageState, collection_item_coverage_state, resolve_coverage
+    from scripts.coverage_resolution import CoverageResolutionError, CoverageState, collection_item_coverage_state, resolve_coverage, declared_coverage_state
 
 try:
     from authoritative_payload import authoritative_payload, _dependency_status, _lexical_valency_status, _record_objects, _semantic_role_status, _constituent_ids
@@ -33,6 +33,19 @@ try:
     from dimension_registry import DIMENSION_REGISTRY, PROJECTION_FIELD_DIMENSIONS, dimension_spec, projection_property_dimensions
 except ImportError:
     from scripts.dimension_registry import DIMENSION_REGISTRY, PROJECTION_FIELD_DIMENSIONS, dimension_spec, projection_property_dimensions
+
+try:
+    from typed_relation_contract import (
+        validate_typed_relation_structure,
+        validate_typed_analysis_container,
+        get_analysis_entity_ids,
+    )
+except ImportError:
+    from scripts.typed_relation_contract import (
+        validate_typed_relation_structure,
+        validate_typed_analysis_container,
+        get_analysis_entity_ids,
+    )
 
 
 DEFAULT_SYSTEM = "You are English Syntax Tutor. Distinguish lexical category, phrase category, syntactic function, semantic role, and framework-specific terminology."
@@ -588,8 +601,32 @@ def _typed_relation_dimension(relation: dict[str, Any]) -> str:
 
 
 def _typed_relation_is_covered(record: dict[str, Any], relation: dict[str, Any], typed: dict[str, Any] | None = None) -> bool:
+    """Check if a typed relation is covered AND structurally valid.
+
+    A1c: Coverage permission alone is insufficient; the relation must also be
+    structurally valid to project into positive supervision.
+    """
+    # First check structural validity
+    if typed is not None and isinstance(typed, dict):
+        if not validate_typed_analysis_container(typed):
+            return False
+        analysis_entity_ids = get_analysis_entity_ids(typed)
+        structural_status = validate_typed_relation_structure(
+            relation,
+            typed,
+            record,
+            analysis_entity_ids=analysis_entity_ids,
+        )
+        if structural_status == "missing":
+            return False
+
     dimension = _typed_relation_dimension(relation)
-    state = _coverage_state(record, dimension)
+    # Use declared coverage state to avoid payload validation failures
+    try:
+        state = declared_coverage_state(record, dimension)
+    except CoverageResolutionError:
+        state = None
+
     if state == CoverageState.COMPLETE:
         return True
     if state == CoverageState.PARTIAL_COVERED:

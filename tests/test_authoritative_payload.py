@@ -1164,5 +1164,613 @@ class CollectionPayloadIntegrityTests(unittest.TestCase):
         self.assertEqual(payload.resolved_count, 0)
 
 
+class TypedRelationStructuralIntegrityTests(unittest.TestCase):
+    """A1c: Validator-invalid typed relations must not be resolved positive payload."""
+
+    def _typed_record(self, relation: dict[str, Any], relation_type: str = "dependency") -> dict[str, Any]:
+        record = copy.deepcopy(FIXTURE)
+        record = with_declaration(record, declaration("dependencies", {"kind": "record"}))
+        typed = record["canonical_analysis"]["typed_analysis"]
+        typed["status"] = "established"
+        typed["relations"] = [relation]
+        return record
+
+    def test_valid_binary_relation_resolved(self) -> None:
+        relation = {
+            "id": "r1",
+            "type": "dependency",
+            "arity": "binary",
+            "source": "word:w2",
+            "target": "constituent:obj",
+            "status": "established",
+        }
+        record = self._typed_record(relation)
+        self.assertEqual(validate_record(record, "valid-binary"), [])
+        payload = authoritative_payload(record, "dependencies")
+        self.assertIs(payload.state, AuthoritativePayloadState.PRESENT)
+        self.assertEqual(payload.resolved_count, 1)
+        self.assertTrue(payload.fully_resolved)
+
+    def test_missing_id_not_resolved(self) -> None:
+        relation = {
+            "type": "dependency",
+            "arity": "binary",
+            "source": "word:w2",
+            "target": "constituent:obj",
+            "status": "established",
+        }
+        record = self._typed_record(relation)
+        errors = validate_record(record, "missing-id")
+        self.assertTrue(any("stable non-empty id" in error for error in errors))
+        payload = authoritative_payload(record, "dependencies")
+        self.assertEqual(payload.resolved_count, 0)
+        self.assertEqual(payload.missing_count, 1)
+
+    def test_missing_type_not_resolved(self) -> None:
+        relation = {
+            "id": "r1",
+            "arity": "binary",
+            "source": "word:w2",
+            "target": "constituent:obj",
+            "status": "established",
+        }
+        record = self._typed_record(relation)
+        errors = validate_record(record, "missing-type")
+        self.assertTrue(any("non-empty relation type" in error for error in errors))
+        # Relations with missing type are not collected because they don't match owned relation types
+        payload = authoritative_payload(record, "dependencies")
+        self.assertEqual(payload.resolved_count, 0)
+
+    def test_missing_arity_not_resolved(self) -> None:
+        relation = {
+            "id": "r1",
+            "type": "dependency",
+            "source": "word:w2",
+            "target": "constituent:obj",
+            "status": "established",
+        }
+        record = self._typed_record(relation)
+        errors = validate_record(record, "missing-arity")
+        self.assertTrue(any("explicit arity" in error for error in errors))
+        payload = authoritative_payload(record, "dependencies")
+        self.assertEqual(payload.resolved_count, 0)
+        self.assertEqual(payload.missing_count, 1)
+
+    def test_invalid_arity_not_resolved(self) -> None:
+        relation = {
+            "id": "r1",
+            "type": "dependency",
+            "arity": "ternary",
+            "source": "word:w2",
+            "target": "constituent:obj",
+            "status": "established",
+        }
+        record = self._typed_record(relation)
+        errors = validate_record(record, "invalid-arity")
+        self.assertTrue(any("unary or binary" in error for error in errors))
+        payload = authoritative_payload(record, "dependencies")
+        self.assertEqual(payload.resolved_count, 0)
+        self.assertEqual(payload.missing_count, 1)
+
+    def test_binary_missing_target_not_resolved(self) -> None:
+        relation = {
+            "id": "r1",
+            "type": "dependency",
+            "arity": "binary",
+            "source": "word:w2",
+            "status": "established",
+        }
+        record = self._typed_record(relation)
+        errors = validate_record(record, "binary-missing-target")
+        self.assertTrue(any("requires target" in error for error in errors))
+        payload = authoritative_payload(record, "dependencies")
+        self.assertEqual(payload.resolved_count, 0)
+        self.assertEqual(payload.missing_count, 1)
+
+    def test_unary_with_target_not_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record = with_declaration(record, declaration("construction_relations", {"kind": "record"}))
+        typed = record["canonical_analysis"]["typed_analysis"]
+        typed["status"] = "established"
+        typed["relations"] = [{
+            "id": "r1",
+            "type": "custom:unary",
+            "arity": "unary",
+            "source": "word:w2",
+            "target": "constituent:obj",
+            "status": "established",
+        }]
+        errors = validate_record(record, "unary-with-target")
+        self.assertTrue(any("cannot carry target" in error for error in errors))
+        payload = authoritative_payload(record, "construction_relations")
+        self.assertEqual(payload.resolved_count, 0)
+
+    def test_valid_unary_extension_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record = with_declaration(record, declaration("construction_relations", {"kind": "record"}))
+        typed = record["canonical_analysis"]["typed_analysis"]
+        typed["status"] = "established"
+        typed["relations"] = [{
+            "id": "r1",
+            "type": "custom:unary",
+            "arity": "unary",
+            "source": "word:w2",
+            "status": "established",
+        }]
+        # Extension relations are structurally valid but may not be owned by any dimension
+        # So we just check that the relation is structurally valid
+        from scripts.typed_relation_contract import validate_typed_relation_structure, get_analysis_entity_ids
+        entity_ids = get_analysis_entity_ids(typed)
+        status = validate_typed_relation_structure(typed["relations"][0], typed, record, analysis_entity_ids=entity_ids)
+        self.assertEqual(status, "resolved")
+
+    def test_dangling_source_not_resolved(self) -> None:
+        relation = {
+            "id": "r1",
+            "type": "dependency",
+            "arity": "binary",
+            "source": "word:ghost",
+            "target": "constituent:obj",
+            "status": "established",
+        }
+        record = self._typed_record(relation)
+        errors = validate_record(record, "dangling-source")
+        self.assertTrue(any("dangling" in error for error in errors))
+        payload = authoritative_payload(record, "dependencies")
+        self.assertEqual(payload.resolved_count, 0)
+        self.assertEqual(payload.missing_count, 1)
+
+    def test_dangling_target_not_resolved(self) -> None:
+        relation = {
+            "id": "r1",
+            "type": "dependency",
+            "arity": "binary",
+            "source": "word:w2",
+            "target": "constituent:ghost",
+            "status": "established",
+        }
+        record = self._typed_record(relation)
+        errors = validate_record(record, "dangling-target")
+        self.assertTrue(any("dangling" in error for error in errors))
+        payload = authoritative_payload(record, "dependencies")
+        self.assertEqual(payload.resolved_count, 0)
+        self.assertEqual(payload.missing_count, 1)
+
+    def test_dangling_analysis_local_entity_not_resolved(self) -> None:
+        relation = {
+            "id": "r1",
+            "type": "dependency",
+            "arity": "binary",
+            "source": "word:w2",
+            "target": "analysis:ghost",
+            "status": "established",
+        }
+        record = self._typed_record(relation)
+        errors = validate_record(record, "dangling-analysis")
+        self.assertTrue(any("dangling" in error for error in errors))
+        payload = authoritative_payload(record, "dependencies")
+        self.assertEqual(payload.resolved_count, 0)
+        self.assertEqual(payload.missing_count, 1)
+
+    def test_valid_canonical_references_resolved(self) -> None:
+        relation = {
+            "id": "r1",
+            "type": "dependency",
+            "arity": "binary",
+            "source": {"namespace": "word", "id": "w2"},
+            "target": {"namespace": "constituent", "id": "obj"},
+            "status": "established",
+        }
+        record = self._typed_record(relation)
+        self.assertEqual(validate_record(record, "valid-canonical-refs"), [])
+        payload = authoritative_payload(record, "dependencies")
+        self.assertEqual(payload.resolved_count, 1)
+
+    def test_valid_analysis_local_reference_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record = with_declaration(record, declaration("dependencies", {"kind": "record"}))
+        typed = record["canonical_analysis"]["typed_analysis"]
+        typed["status"] = "established"
+        typed["entities"] = [{"id": "e1", "kind": "understood_subject"}]
+        typed["relations"] = [{
+            "id": "r1",
+            "type": "dependency",
+            "arity": "binary",
+            "source": "word:w2",
+            "target": "analysis:e1",
+            "status": "established",
+        }]
+        self.assertEqual(validate_record(record, "valid-analysis-ref"), [])
+        payload = authoritative_payload(record, "dependencies")
+        self.assertEqual(payload.resolved_count, 1)
+
+    def test_cross_analysis_entity_does_not_satisfy_local_reference(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record = with_declaration(record, declaration("dependencies", {"kind": "record"}))
+        canonical_typed = record["canonical_analysis"]["typed_analysis"]
+        canonical_typed["status"] = "established"
+        canonical_typed["entities"] = [{"id": "e1", "kind": "understood_subject"}]
+        canonical_typed["relations"] = [{
+            "id": "r1",
+            "type": "dependency",
+            "arity": "binary",
+            "source": "word:w2",
+            "target": "analysis:e1",
+            "status": "established",
+        }]
+        record["alternative_analyses"] = [{
+            "id": "alt-1",
+            "framework": "CGEL",
+            "status": "established",
+            "typed_analysis": {
+                "kind": "record_level_analysis",
+                "framework": "CGEL",
+                "status": "established",
+                "relations": [{
+                    "id": "r2",
+                    "type": "dependency",
+                    "arity": "binary",
+                    "source": "word:w2",
+                    "target": "analysis:e1",
+                    "status": "established",
+                }],
+            },
+        }]
+        errors = validate_record(record, "cross-analysis-ref")
+        self.assertTrue(any("dangling" in error for error in errors))
+
+    def test_invalid_framework_not_resolved(self) -> None:
+        relation = {
+            "id": "r1",
+            "type": "dependency",
+            "arity": "binary",
+            "source": "word:w2",
+            "target": "constituent:obj",
+            "framework": "invalid_framework",
+            "status": "established",
+        }
+        record = self._typed_record(relation)
+        errors = validate_record(record, "invalid-framework")
+        self.assertTrue(any("known framework" in error for error in errors))
+        payload = authoritative_payload(record, "dependencies")
+        self.assertEqual(payload.resolved_count, 0)
+        self.assertEqual(payload.missing_count, 1)
+
+    def test_framework_relation_no_attribution_not_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record = with_declaration(record, declaration("construction_relations", {"kind": "record"}))
+        typed = record["canonical_analysis"]["typed_analysis"]
+        typed["status"] = "established"
+        typed["relations"] = [{
+            "id": "r1",
+            "type": "framework_relation",
+            "arity": "binary",
+            "source": "word:w2",
+            "target": "constituent:obj",
+            "status": "established",
+        }]
+        errors = validate_record(record, "framework-relation-no-attribution")
+        self.assertTrue(any("framework or namespace" in error for error in errors))
+        payload = authoritative_payload(record, "construction_relations")
+        self.assertEqual(payload.resolved_count, 0)
+
+    def test_qualified_extension_relation_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record = with_declaration(record, declaration("construction_relations", {"kind": "record"}))
+        typed = record["canonical_analysis"]["typed_analysis"]
+        typed["status"] = "established"
+        typed["relations"] = [{
+            "id": "r1",
+            "type": "pedagogical:object",
+            "arity": "binary",
+            "source": "word:w2",
+            "target": "constituent:obj",
+            "status": "established",
+        }]
+        # Extension relations are structurally valid but may not be owned by any dimension
+        # So we just check that the relation is structurally valid
+        from scripts.typed_relation_contract import validate_typed_relation_structure, get_analysis_entity_ids
+        entity_ids = get_analysis_entity_ids(typed)
+        status = validate_typed_relation_structure(typed["relations"][0], typed, record, analysis_entity_ids=entity_ids)
+        self.assertEqual(status, "resolved")
+
+    def test_unqualified_unknown_extension_not_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record = with_declaration(record, declaration("construction_relations", {"kind": "record"}))
+        typed = record["canonical_analysis"]["typed_analysis"]
+        typed["status"] = "established"
+        typed["relations"] = [{
+            "id": "r1",
+            "type": "custom_relation",
+            "arity": "binary",
+            "source": "word:w2",
+            "target": "constituent:obj",
+            "status": "established",
+        }]
+        errors = validate_record(record, "unqualified-extension")
+        self.assertTrue(any("unknown extension" in error for error in errors))
+        payload = authoritative_payload(record, "construction_relations")
+        self.assertEqual(payload.resolved_count, 0)
+
+    def test_duplicate_relation_ids_same_analysis_not_clean_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record = with_declaration(record, declaration("dependencies", {"kind": "record"}))
+        typed = record["canonical_analysis"]["typed_analysis"]
+        typed["status"] = "established"
+        typed["relations"] = [
+            {
+                "id": "r1",
+                "type": "dependency",
+                "arity": "binary",
+                "source": "word:w2",
+                "target": "constituent:obj",
+                "status": "established",
+            },
+            {
+                "id": "r1",
+                "type": "dependency",
+                "arity": "binary",
+                "source": "word:w1",
+                "target": "constituent:obj",
+                "status": "established",
+            },
+        ]
+        errors = validate_record(record, "duplicate-relation-ids")
+        self.assertTrue(any("duplicate" in error for error in errors))
+        payload = authoritative_payload(record, "dependencies")
+        self.assertEqual(payload.resolved_count, 0)
+        self.assertEqual(payload.missing_count, 2)
+        self.assertFalse(payload.fully_resolved)
+
+    def test_duplicate_relation_ids_cross_analysis_not_clean_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record = with_declaration(record, declaration("dependencies", {"kind": "record"}))
+        canonical_typed = record["canonical_analysis"]["typed_analysis"]
+        canonical_typed["status"] = "established"
+        canonical_typed["relations"] = [{
+            "id": "r1",
+            "type": "dependency",
+            "arity": "binary",
+            "source": "word:w2",
+            "target": "constituent:obj",
+            "status": "established",
+        }]
+        record["alternative_analyses"] = [{
+            "id": "alt-1",
+            "framework": "CGEL",
+            "status": "established",
+            "typed_analysis": {
+                "kind": "record_level_analysis",
+                "framework": "CGEL",
+                "status": "established",
+                "relations": [{
+                    "id": "r1",
+                    "type": "dependency",
+                    "arity": "binary",
+                    "source": "word:w1",
+                    "target": "constituent:obj",
+                    "status": "established",
+                }],
+            },
+        }]
+        errors = validate_record(record, "duplicate-cross-analysis")
+        self.assertTrue(any("duplicate" in error for error in errors))
+        payload = authoritative_payload(record, "dependencies")
+        self.assertEqual(payload.resolved_count, 0)
+        self.assertFalse(payload.fully_resolved)
+
+    def test_duplicate_entity_ids_same_analysis_not_clean_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record = with_declaration(record, declaration("construction_relations", {"kind": "record"}))
+        typed = record["canonical_analysis"]["typed_analysis"]
+        typed["status"] = "established"
+        typed["entities"] = [
+            {"id": "e1", "kind": "understood_subject"},
+            {"id": "e1", "kind": "clause"},
+        ]
+        errors = validate_record(record, "duplicate-entity-ids")
+        self.assertTrue(any("duplicate" in error for error in errors))
+        items = authoritative_payload_items(record, "construction_relations")
+        entity_items = [item for item in items if item.field == "typed_entity"]
+        self.assertTrue(all(item.status == "missing" for item in entity_items))
+
+    def test_structurally_valid_unresolved_relation_is_unresolved(self) -> None:
+        relation = {
+            "id": "r1",
+            "type": "dependency",
+            "arity": "binary",
+            "source": "word:w2",
+            "target": "constituent:obj",
+            "status": "unresolved",
+        }
+        record = self._typed_record(relation)
+        # Unresolved relations are structurally valid but don't count as resolved payload
+        payload = authoritative_payload(record, "dependencies")
+        self.assertEqual(payload.unresolved_count, 1)
+        self.assertEqual(payload.resolved_count, 0)
+
+    def test_structurally_invalid_unresolved_relation_is_missing(self) -> None:
+        relation = {
+            "id": "r1",
+            "type": "dependency",
+            "arity": "binary",
+            "source": "word:ghost",
+            "target": "constituent:obj",
+            "status": "unresolved",
+        }
+        record = self._typed_record(relation)
+        errors = validate_record(record, "invalid-unresolved")
+        self.assertTrue(any("dangling" in error for error in errors))
+        payload = authoritative_payload(record, "dependencies")
+        self.assertEqual(payload.unresolved_count, 0)
+        self.assertEqual(payload.missing_count, 1)
+
+
+class TypedRelationRendererSafetyTests(unittest.TestCase):
+    """A1c: Renderer must not project structurally invalid typed relations."""
+
+    def _typed_record(self, relation: dict[str, Any]) -> dict[str, Any]:
+        record = copy.deepcopy(FIXTURE)
+        record = with_declaration(record, declaration("dependencies", {"kind": "record"}))
+        typed = record["canonical_analysis"]["typed_analysis"]
+        typed["status"] = "established"
+        typed["relations"] = [relation]
+        return record
+
+    def test_missing_arity_relation_does_not_project(self) -> None:
+        relation = {
+            "id": "r1",
+            "type": "dependency",
+            "source": "word:w2",
+            "target": "constituent:obj",
+            "status": "established",
+        }
+        record = self._typed_record(relation)
+        projection = linguistic_projection(record)
+        typed_analysis = projection.get("canonical_analysis", {}).get("typed_analysis", {})
+        relations = typed_analysis.get("relations", [])
+        self.assertEqual(len(relations), 0)
+
+    def test_dangling_source_relation_does_not_project(self) -> None:
+        relation = {
+            "id": "r1",
+            "type": "dependency",
+            "arity": "binary",
+            "source": "word:ghost",
+            "target": "constituent:obj",
+            "status": "established",
+        }
+        record = self._typed_record(relation)
+        projection = linguistic_projection(record)
+        typed_analysis = projection.get("canonical_analysis", {}).get("typed_analysis", {})
+        relations = typed_analysis.get("relations", [])
+        self.assertEqual(len(relations), 0)
+
+    def test_dangling_target_relation_does_not_project(self) -> None:
+        relation = {
+            "id": "r1",
+            "type": "dependency",
+            "arity": "binary",
+            "source": "word:w2",
+            "target": "constituent:ghost",
+            "status": "established",
+        }
+        record = self._typed_record(relation)
+        projection = linguistic_projection(record)
+        typed_analysis = projection.get("canonical_analysis", {}).get("typed_analysis", {})
+        relations = typed_analysis.get("relations", [])
+        self.assertEqual(len(relations), 0)
+
+    def test_unary_with_target_does_not_project(self) -> None:
+        relation = {
+            "id": "r1",
+            "type": "custom:unary",
+            "arity": "unary",
+            "source": "word:w2",
+            "target": "constituent:obj",
+            "status": "established",
+        }
+        record = self._typed_record(relation)
+        projection = linguistic_projection(record)
+        typed_analysis = projection.get("canonical_analysis", {}).get("typed_analysis", {})
+        relations = typed_analysis.get("relations", [])
+        self.assertEqual(len(relations), 0)
+
+    def test_valid_relation_still_projects(self) -> None:
+        relation = {
+            "id": "r1",
+            "type": "dependency",
+            "arity": "binary",
+            "source": "word:w2",
+            "target": "constituent:obj",
+            "status": "established",
+        }
+        record = self._typed_record(relation)
+        projection = linguistic_projection(record)
+        typed_analysis = projection.get("canonical_analysis", {}).get("typed_analysis", {})
+        relations = typed_analysis.get("relations", [])
+        self.assertEqual(len(relations), 1)
+        self.assertEqual(relations[0]["id"], "r1")
+
+    def test_valid_sibling_relation_projects_when_another_invalid(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record = with_declaration(record, declaration("dependencies", {"kind": "record"}))
+        typed = record["canonical_analysis"]["typed_analysis"]
+        typed["status"] = "established"
+        typed["relations"] = [
+            {
+                "id": "r1",
+                "type": "dependency",
+                "arity": "binary",
+                "source": "word:w2",
+                "target": "constituent:obj",
+                "status": "established",
+            },
+            {
+                "id": "r2",
+                "type": "dependency",
+                "arity": "binary",
+                "source": "word:ghost",
+                "target": "constituent:obj",
+                "status": "established",
+            },
+        ]
+        projection = linguistic_projection(record)
+        typed_analysis = projection.get("canonical_analysis", {}).get("typed_analysis", {})
+        relations = typed_analysis.get("relations", [])
+        self.assertEqual(len(relations), 1)
+        self.assertEqual(relations[0]["id"], "r1")
+
+
+class TypedRelationCoverageScoringSafetyTests(unittest.TestCase):
+    """A1c: Mixed valid/invalid typed payload must not be fully resolved."""
+
+    def test_complete_mixed_valid_invalid_not_fully_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record = with_declaration(record, declaration("dependencies", {"kind": "record"}))
+        typed = record["canonical_analysis"]["typed_analysis"]
+        typed["status"] = "established"
+        typed["relations"] = [
+            {
+                "id": "r1",
+                "type": "dependency",
+                "arity": "binary",
+                "source": "word:w2",
+                "target": "constituent:obj",
+                "status": "established",
+            },
+            {
+                "id": "r2",
+                "type": "dependency",
+                "arity": "binary",
+                "source": "word:ghost",
+                "target": "constituent:obj",
+                "status": "established",
+            },
+        ]
+        payload = authoritative_payload(record, "dependencies")
+        self.assertIs(payload.state, AuthoritativePayloadState.PRESENT)
+        self.assertGreater(payload.resolved_count, 0)
+        self.assertGreater(payload.missing_count, 0)
+        self.assertFalse(payload.fully_resolved)
+
+    def test_invalid_relation_not_positive_supervision(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record = with_declaration(record, declaration("dependencies", {"kind": "record"}))
+        typed = record["canonical_analysis"]["typed_analysis"]
+        typed["status"] = "established"
+        typed["relations"] = [{
+            "id": "r1",
+            "type": "dependency",
+            "arity": "binary",
+            "source": "word:ghost",
+            "target": "constituent:obj",
+            "status": "established",
+        }]
+        payload = authoritative_payload(record, "dependencies")
+        self.assertEqual(payload.resolved_count, 0)
+        self.assertGreater(payload.missing_count, 0)
+
+
 if __name__ == "__main__":
     unittest.main()
