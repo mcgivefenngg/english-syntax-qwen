@@ -58,6 +58,10 @@ def add_overlap_target(record: dict[str, Any]) -> None:
     })
 
 
+def clear_lexical_w5(record: dict[str, Any]) -> None:
+    record["words"][5]["lexical_category"] = None
+
+
 class CoverageResolutionTests(unittest.TestCase):
     def test_valid_canonical_record_resolves_exact_node_and_record_scope(self) -> None:
         record = with_dimensions(
@@ -307,23 +311,27 @@ class CoverageResolutionTests(unittest.TestCase):
         self.assertIs(resolve_coverage(record, DIMENSION, "subj"), CoverageState.COMPLETE)
 
     def test_record_partial_does_not_complete_uncovered_target(self) -> None:
-        record = with_dimensions(declaration({"kind": "record"}, "partial"))
-        self.assertIs(resolve_coverage(record, DIMENSION, "obj"), CoverageState.PARTIAL_UNCOVERED)
-        self.assertFalse(coverage_allows_score(record, DIMENSION, "obj"))
+        record = with_dimensions(declaration({"kind": "record"}, "partial", dimension="lexical_category"))
+        clear_lexical_w5(record)
+        self.assertIs(resolve_coverage(record, "lexical_category", "w5"), CoverageState.PARTIAL_UNCOVERED)
+        self.assertFalse(coverage_allows_score(record, "lexical_category", "w5"))
 
     def test_scoring_eligibility_state_matrix(self) -> None:
         cases = (
-            (declaration({"kind": "record"}, "complete"), None, CoverageState.COMPLETE, True),
-            (declaration({"kind": "record"}, "complete", evidence="empty", dimension="dependencies"), None, CoverageState.CONFIRMED_EMPTY, True),
-            (declaration({"kind": "node", "node": "subj"}, "partial"), "subj", CoverageState.PARTIAL_COVERED, True),
-            (declaration({"kind": "record"}, "partial"), "obj", CoverageState.PARTIAL_UNCOVERED, False),
-            (declaration({"kind": "record"}, "omitted", "intentional", "unannotated", "dependencies"), None, CoverageState.OMITTED, False),
-            (declaration({"kind": "record"}, "unannotated", "intentional", "unannotated", "dependencies"), None, CoverageState.UNANNOTATED, False),
-            (declaration({"kind": "record"}, "out_of_scope", "not_applicable", "unannotated", "dependencies"), None, CoverageState.OUT_OF_SCOPE, False),
+            (declaration({"kind": "record"}, "complete"), None, CoverageState.COMPLETE, True, None),
+            (declaration({"kind": "record"}, "complete", evidence="empty", dimension="dependencies"), None, CoverageState.CONFIRMED_EMPTY, True, None),
+            (declaration({"kind": "node", "node": "subj"}, "partial"), "subj", CoverageState.PARTIAL_COVERED, True, None),
+            (declaration({"kind": "record"}, "partial", dimension="lexical_category"), "w5", CoverageState.PARTIAL_UNCOVERED, False, clear_lexical_w5),
+            (declaration({"kind": "record"}, "partial", dimension="lexical_category"), "w0", CoverageState.PARTIAL_COVERED, True, clear_lexical_w5),
+            (declaration({"kind": "record"}, "omitted", "intentional", "unannotated", "dependencies"), None, CoverageState.OMITTED, False, None),
+            (declaration({"kind": "record"}, "unannotated", "intentional", "unannotated", "dependencies"), None, CoverageState.UNANNOTATED, False, None),
+            (declaration({"kind": "record"}, "out_of_scope", "not_applicable", "unannotated", "dependencies"), None, CoverageState.OUT_OF_SCOPE, False, None),
         )
-        for entry, target, state, scoreable in cases:
-            with self.subTest(state=state):
+        for entry, target, state, scoreable, mutate in cases:
+            with self.subTest(state=state, target=target):
                 record = with_dimensions(entry)
+                if mutate is not None:
+                    mutate(record)
                 decision = resolve_scoring_eligibility(record, entry["dimension"], target)
                 self.assertIs(decision.coverage_state, state)
                 self.assertIs(decision.state, state)
@@ -407,17 +415,20 @@ class CoverageResolutionTests(unittest.TestCase):
 
     def test_resolver_exposes_all_controlled_states(self) -> None:
         cases = (
-            (declaration({"kind": "record"}, "complete"), None, CoverageState.COMPLETE),
-            (declaration({"kind": "node", "node": "subj"}, "partial"), "subj", CoverageState.PARTIAL_COVERED),
-            (declaration({"kind": "record"}, "partial"), "subj", CoverageState.PARTIAL_UNCOVERED),
-            (declaration({"kind": "record"}, "omitted", "intentional", "unannotated", "dependencies"), None, CoverageState.OMITTED),
-            (declaration({"kind": "record"}, "unannotated", "intentional", "unannotated", "dependencies"), None, CoverageState.UNANNOTATED),
-            (declaration({"kind": "record"}, "out_of_scope", "not_applicable", "unannotated", "dependencies"), None, CoverageState.OUT_OF_SCOPE),
-            (declaration({"kind": "record"}, "complete", evidence="empty", dimension="dependencies"), None, CoverageState.CONFIRMED_EMPTY),
+            (declaration({"kind": "record"}, "complete"), None, CoverageState.COMPLETE, None),
+            (declaration({"kind": "node", "node": "subj"}, "partial"), "subj", CoverageState.PARTIAL_COVERED, None),
+            (declaration({"kind": "record"}, "partial", dimension="lexical_category"), "w5", CoverageState.PARTIAL_UNCOVERED, clear_lexical_w5),
+            (declaration({"kind": "record"}, "partial", dimension="lexical_category"), "w0", CoverageState.PARTIAL_COVERED, clear_lexical_w5),
+            (declaration({"kind": "record"}, "omitted", "intentional", "unannotated", "dependencies"), None, CoverageState.OMITTED, None),
+            (declaration({"kind": "record"}, "unannotated", "intentional", "unannotated", "dependencies"), None, CoverageState.UNANNOTATED, None),
+            (declaration({"kind": "record"}, "out_of_scope", "not_applicable", "unannotated", "dependencies"), None, CoverageState.OUT_OF_SCOPE, None),
+            (declaration({"kind": "record"}, "complete", evidence="empty", dimension="dependencies"), None, CoverageState.CONFIRMED_EMPTY, None),
         )
-        for entry, target, expected in cases:
+        for entry, target, expected, mutate in cases:
             with self.subTest(expected=expected):
                 record = with_dimensions(entry)
+                if mutate is not None:
+                    mutate(record)
                 self.assertIs(resolve_coverage(record, entry["dimension"], target), expected)
 
     def assert_invalid_coverage(

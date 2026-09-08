@@ -466,6 +466,44 @@ def declared_coverage_state(
     return CoverageState.UNANNOTATED
 
 
+def _derive_partial_present_coverage(
+    record: dict[str, Any],
+    dimension: str,
+    target: str | dict[str, Any] | None,
+) -> CoverageState | None:
+    """Activate registry-declared partial-present target semantics.
+
+    A record-level ``partial + evidence="present"`` declaration states that a
+    positive subset is explicitly annotated; ``partial_present_target_source``
+    identifies that subset from resolved authoritative payload. Absence outside
+    the subset remains unknown, never negative gold. Raw declaration
+    resolution stays separate so confirmed-empty helpers never recurse
+    through payload derivation.
+    """
+    spec = dimension_spec(dimension)
+    if spec is None:
+        return None
+    source = spec.partial_present_target_source
+    if source is None:
+        return None
+    validation = validate_coverage_target(record, dimension, target)
+    if not validation.valid:
+        return None
+    if source == "record":
+        if not validation.is_record_target:
+            return None
+        payload_target: str | dict[str, Any] | None = None
+    else:
+        if validation.is_record_target:
+            return None
+        normalized = validation.normalized_target
+        if not isinstance(normalized, str):
+            return None
+        payload_target = normalized
+    payload = authoritative_payload(record, dimension, payload_target)
+    return CoverageState.PARTIAL_COVERED if payload.has_resolved_content else None
+
+
 def resolve_coverage(
     record: dict[str, Any],
     dimension: str,
@@ -490,7 +528,12 @@ def resolve_coverage(
     if issues:
         issue = issues[0]
         raise CoverageResolutionError(f"{issue.message} (declaration index {issue.index})")
-    return declared_coverage_state(record, dimension, target)
+    state = declared_coverage_state(record, dimension, target)
+    if state is CoverageState.PARTIAL_UNCOVERED:
+        derived = _derive_partial_present_coverage(record, dimension, target)
+        if derived is not None:
+            return derived
+    return state
 
 
 def _collection_item_coverage_state(

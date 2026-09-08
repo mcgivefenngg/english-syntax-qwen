@@ -116,7 +116,7 @@ def _spec(
 
 _DIMENSIONS = {
     "tokens": _spec(
-        "tokens", scopes={"record"}, evidence={"present", "unannotated"}, empty_scopes=set(),
+        "tokens", scopes={"record"}, nodes={"word"}, evidence={"present", "unannotated"}, empty_scopes=set(),
         partial_present_target_source="item_ids", payload_family="word_collection", collection_like=True,
         payloads=(_payload("words", "id", "node_kind", "form", "lemma"),), target_fields=("id",),
     ),

@@ -15,6 +15,11 @@ except ImportError:
     from scripts.coverage_resolution import CoverageResolutionError, CoverageState, collection_item_coverage_state, resolve_coverage
 
 try:
+    from authoritative_payload import authoritative_payload
+except ImportError:
+    from scripts.authoritative_payload import authoritative_payload
+
+try:
     from collection_contract import normalize_collection_item
 except ImportError:
     from scripts.collection_contract import normalize_collection_item
@@ -429,6 +434,26 @@ def _project_constituents(record: dict[str, Any], rendering_mode: str) -> list[d
     return result or None
 
 
+def _resolved_positive_identifiers(record: dict[str, Any], dimension: str) -> frozenset[str]:
+    return frozenset(authoritative_payload(record, dimension).resolved_ids)
+
+
+def _partial_record_scalar_covered(record: dict[str, Any], field: str, dimensions: tuple[str, ...]) -> bool:
+    """A record scalar may project under partial-present only when it is itself
+    authoritative positive payload of a dimension whose partial target source
+    is the record annotation itself."""
+    for dimension in dimensions:
+        spec = dimension_spec(dimension)
+        if spec is None or spec.partial_present_target_source != "record" or field not in spec.fields:
+            continue
+        if _coverage_state(record, dimension) is not CoverageState.PARTIAL_COVERED:
+            continue
+        resolved = _resolved_positive_identifiers(record, dimension)
+        if field in resolved or any(identifier.startswith(f"{field}[") for identifier in resolved):
+            return True
+    return False
+
+
 def _project_relation_collection(record: dict[str, Any], field: str, dimension: str, identifiers: Any, rendering_mode: str) -> list[dict[str, Any]] | None:
     record_state = _coverage_state(record, dimension)
     values = record.get(field)
@@ -439,10 +464,18 @@ def _project_relation_collection(record: dict[str, Any], field: str, dimension: 
         return None
     context = {"dependencies": "dependency", "semantic_roles": "semantic_role", "heads": "head_relation"}.get(field, field)
     if spec is not None and spec.allowed_scope_kinds == frozenset({"record"}):
-        if record_state != CoverageState.COMPLETE:
+        if record_state == CoverageState.COMPLETE:
+            positive: list[Any] = list(values)
+        elif (
+            record_state == CoverageState.PARTIAL_COVERED
+            and spec.partial_present_target_source == "record"
+        ):
+            resolved = _resolved_positive_identifiers(record, dimension)
+            positive = [value for index, value in enumerate(values) if f"{field}[{index}]" in resolved]
+        else:
             return None
         result = []
-        for value in values:
+        for value in positive:
             normalized = normalize_collection_item(record, dimension, value)
             if normalized is not None:
                 result.append(_without_governance(normalized, context, rendering_mode=rendering_mode))
@@ -542,13 +575,14 @@ def _typed_relation_dimension(relation: dict[str, Any]) -> str:
     return "dependencies" if relation.get("type") == "dependency" else "construction_relations"
 
 
-def _typed_relation_is_covered(record: dict[str, Any], relation: dict[str, Any]) -> bool:
+def _typed_relation_is_covered(record: dict[str, Any], relation: dict[str, Any], typed: dict[str, Any] | None = None) -> bool:
     dimension = _typed_relation_dimension(relation)
     state = _coverage_state(record, dimension)
     if state == CoverageState.COMPLETE:
         return True
     if state == CoverageState.PARTIAL_COVERED:
-        return True
+        status = relation.get("status", (typed or {}).get("status"))
+        return status not in {"unresolved", "review_required"}
     return any(_covered(record, dimension, target) for target in _typed_relation_targets(relation))
 
 
@@ -669,7 +703,7 @@ def _project_typed_analysis(record: dict[str, Any], value: Any, rendering_mode: 
     projected_relations: list[dict[str, Any]] = []
     if isinstance(relations, list):
         for relation in relations:
-            if isinstance(relation, dict) and _typed_relation_is_covered(record, relation):
+            if isinstance(relation, dict) and _typed_relation_is_covered(record, relation, value):
                 dimension = _typed_relation_dimension(relation)
                 projected_relations.append(_project_typed_object(record, relation, "typed_relation", dimension, rendering_mode))
     construction_covered = _record_complete(record, ("construction_relations",))
@@ -923,20 +957,29 @@ def linguistic_projection(record: dict[str, Any], *, include_governance: bool = 
     for field, dimensions in scalar_dimensions.items():
         if field not in record:
             continue
+        value = record[field]
         if field in {"pedagogical_aliases", "fusion_relations", "ambiguity", "rejected_analyses", "error_diagnosis"}:
             if not _record_complete(record, dimensions):
-                continue
+                if not (
+                    isinstance(value, list)
+                    and _partial_record_scalar_covered(record, field, dimensions)
+                ):
+                    continue
+                resolved = _resolved_positive_identifiers(record, "construction_relations")
+                value = [item for index, item in enumerate(value) if f"{field}[{index}]" in resolved]
+                if not value:
+                    continue
         elif field in {"explanation", "rationale"}:
             if not _record_complete_all(record, dimensions):
                 continue
-        elif not _record_complete(record, dimensions):
+        elif not (_record_complete(record, dimensions) or _partial_record_scalar_covered(record, field, dimensions)):
             continue
         context = {
             "framework": "framework", "sentence_type_metadata": "sentence_type_metadata", "sentence_classification": "sentence_classification",
             "construction_signature": "construction_signature", "fusion_relations": "fusion_relations", "ambiguity": "ambiguity",
             "rejected_analyses": "rejected_analyses", "error_diagnosis": "error_diagnosis", "pedagogical_aliases": "pedagogical_aliases",
         }.get(field)
-        projection[field] = _without_governance(record[field], context, rendering_mode=rendering_mode)
+        projection[field] = _without_governance(value, context, rendering_mode=rendering_mode)
     for field in ("canonical_analysis", "preferred_analysis"):
         if field in record:
             analysis_covered = bool(projection) and any(key != "sentence" for key in projection)

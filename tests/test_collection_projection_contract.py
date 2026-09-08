@@ -132,7 +132,10 @@ class CollectionProjectionContractTests(unittest.TestCase):
             [VALENCY],
         )
         self.assertFalse(coverage_allows_score(record_scoped, "lexical_valency", "obj"))
-        self.assertNotIn("lexical_valency", linguistic_projection(record_scoped))
+        self.assertEqual(
+            linguistic_projection(record_scoped)["lexical_valency"],
+            [{"predicate": "w2", "frame": "transitive", "selected_complements": ["obj"]}],
+        )
 
     def test_covered_valency_keeps_selected_complements_when_not_covered(self) -> None:
         record = record_with(
@@ -205,12 +208,15 @@ class CollectionProjectionContractTests(unittest.TestCase):
         record = record_with(
             "lexical_valency",
             declaration("lexical_valency", {"kind": "record"}, "partial"),
-            [VALENCY],
+            [VALENCY, {"predicate": "ghost", "frame": "transitive", "selected_complements": []}],
         )
-        decision = resolve_scoring_eligibility(record, "lexical_valency", "w2")
-        self.assertFalse(decision.scoreable)
-        self.assertIs(decision.coverage_state, CoverageState.PARTIAL_UNCOVERED)
-        self.assertNotIn("lexical_valency", linguistic_projection(record))
+        covered = resolve_scoring_eligibility(record, "lexical_valency", "w2")
+        self.assertTrue(covered.scoreable)
+        self.assertIs(covered.coverage_state, CoverageState.PARTIAL_COVERED)
+        self.assertIs(resolve_coverage(record, "lexical_valency"), CoverageState.PARTIAL_UNCOVERED)
+        self.assertFalse(coverage_allows_score(record, "lexical_valency", "w4"))
+        projection = linguistic_projection(record)
+        self.assertEqual([item["predicate"] for item in projection["lexical_valency"]], ["w2"])
 
     def test_confirmed_empty_is_only_allowed_at_registry_supported_scope(self) -> None:
         for dimension, node in (("dependencies", "w2"), ("semantic_roles", "obj"), ("lexical_valency", "w2")):

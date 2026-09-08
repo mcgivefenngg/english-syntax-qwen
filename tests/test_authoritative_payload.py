@@ -130,7 +130,10 @@ class AuthoritativePayloadContractTests(unittest.TestCase):
         record = lexical_node_record("w0")
         record["words"][0]["lexical_analysis"] = unresolved_lexical_analysis()
         projection = linguistic_projection(record)
-        self.assertNotIn("w0", {word["id"] for word in projection.get("words", [])})
+        projected_words = {word["id"]: word for word in projection.get("words", [])}
+        self.assertIn("w0", projected_words)
+        self.assertNotIn("lexical_category", projected_words["w0"])
+        self.assertNotIn("external_pos_tags", projected_words["w0"])
         self.assertNotIn("determinative", json.dumps(projection, ensure_ascii=False))
 
     def test_unrelated_lexical_word_remains_resolved(self) -> None:

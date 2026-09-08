@@ -91,7 +91,10 @@ class CoverageAwareProjectionTests(unittest.TestCase):
 
     def test_partial_uncovered_target_does_not_leak(self) -> None:
         record = record_with(declaration("phrase_constituency", {"kind": "record"}, "partial"))
-        self.assertNotIn("constituents", linguistic_projection(record))
+        record["constituents"][1].pop("phrase_category", None)
+        by_id = {item["id"]: item for item in linguistic_projection(record)["constituents"]}
+        self.assertIn("subj", by_id)
+        self.assertNotIn("obj", by_id)
 
     def test_typed_relation_retains_minimal_reference_shell(self) -> None:
         record = record_with(declaration("construction_relations", {"kind": "record"}))

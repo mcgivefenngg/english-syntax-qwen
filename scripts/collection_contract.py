@@ -132,7 +132,14 @@ def validate_coverage_target(
     dimension: str,
     target: str | dict[str, Any] | None = None,
 ) -> CoverageTargetValidation:
-    """Validate record, node, and region target applicability for a dimension."""
+    """Validate record, node, and region target applicability for a dimension.
+
+    Declaration-scope applicability is owned by ``allowed_scope_kinds``; this
+    function additionally admits registry-derived effective resolution targets
+    (record-level partial-present positive targets via
+    ``partial_present_target_source == "item_ids"``) without enabling
+    node-scoped declarations for those dimensions.
+    """
     spec = dimension_spec(dimension)
     if spec is None:
         return _coverage_target_result(False, "invalid_dimension", f"unknown coverage dimension {dimension!r}")
@@ -167,7 +174,7 @@ def validate_coverage_target(
             return _coverage_target_result(False, "invalid_target", "coverage target must be a node ID or record target")
     if not isinstance(target, str) or not target:
         return _coverage_target_result(False, "invalid_target", "coverage target must be a non-empty node ID or record target")
-    if not spec.allows_scope("node"):
+    if not spec.allows_scope("node") and spec.partial_present_target_source != "item_ids":
         return _coverage_target_result(
             False,
             "unsupported_non_record_target",
