@@ -1772,5 +1772,546 @@ class TypedRelationCoverageScoringSafetyTests(unittest.TestCase):
         self.assertGreater(payload.missing_count, 0)
 
 
+class A1c1PreferredDependencyDuplicationTests(unittest.TestCase):
+    """A1c1-1: Preferred-authority typed dependency duplication."""
+
+    def test_canonical_typed_dependency_duplicating_top_level_not_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["dependencies"] = [{"relation": "obj", "head": "w2", "dependent": "obj"}]
+        record = with_declaration(record, declaration("dependencies", {"kind": "record"}))
+        typed = record["canonical_analysis"]["typed_analysis"]
+        typed["status"] = "established"
+        typed["relations"] = [{
+            "id": "typed-dup",
+            "type": "dependency",
+            "arity": "binary",
+            "source": "word:w2",
+            "target": "constituent:obj",
+            "status": "established",
+        }]
+        errors = validate_record(record, "dup-dep")
+        self.assertTrue(any("duplicates the canonical dependencies layer" in e for e in errors))
+        from scripts.typed_relation_contract import validate_typed_relation_structure, TypedRelationValidationContext, _canonical_dependency_pairs, valid_analysis_entity_ids
+        ctx = TypedRelationValidationContext(
+            preferred_authority=True,
+            relation_id_occurrences={"typed-dup": 1},
+            valid_analysis_entity_ids=valid_analysis_entity_ids(typed),
+            canonical_dependency_pairs=_canonical_dependency_pairs(record),
+        )
+        status = validate_typed_relation_structure(
+            typed["relations"][0],
+            typed,
+            record,
+            context=ctx,
+        )
+        self.assertEqual(status, "missing")
+
+    def test_duplicate_typed_dependency_not_rendered(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["dependencies"] = [{"relation": "obj", "head": "w2", "dependent": "obj"}]
+        record = with_declaration(record, declaration("dependencies", {"kind": "record"}))
+        typed = record["canonical_analysis"]["typed_analysis"]
+        typed["status"] = "established"
+        typed["relations"] = [{
+            "id": "typed-dup",
+            "type": "dependency",
+            "arity": "binary",
+            "source": "word:w2",
+            "target": "constituent:obj",
+            "status": "established",
+        }]
+        projection = linguistic_projection(record)
+        typed_analysis = projection.get("canonical_analysis", {}).get("typed_analysis", {})
+        relations = typed_analysis.get("relations", [])
+        self.assertEqual(len(relations), 0)
+
+    def test_duplicate_typed_dependency_not_scoreable(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["dependencies"] = [{"relation": "obj", "head": "w2", "dependent": "obj"}]
+        record = with_declaration(record, declaration("dependencies", {"kind": "record"}))
+        typed = record["canonical_analysis"]["typed_analysis"]
+        typed["status"] = "established"
+        typed["relations"] = [{
+            "id": "typed-dup",
+            "type": "dependency",
+            "arity": "binary",
+            "source": "word:w2",
+            "target": "constituent:obj",
+            "status": "established",
+        }]
+        decision = resolve_scoring_eligibility(record, "dependencies")
+        self.assertFalse(decision.scoreable)
+
+    def test_non_duplicate_canonical_typed_dependency_remains_valid(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record = with_declaration(record, declaration("construction_relations", {"kind": "record"}))
+        typed = record["canonical_analysis"]["typed_analysis"]
+        typed["status"] = "established"
+        typed["relations"] = [{
+            "id": "r1",
+            "type": "construction",
+            "arity": "binary",
+            "source": "word:w1",
+            "target": "constituent:subj",
+            "status": "established",
+        }]
+        errors = validate_record(record, "non-dup")
+        self.assertEqual([e for e in errors if "duplicates" in e or "typed relation" in e], [])
+        payload = authoritative_payload(record, "construction_relations")
+        self.assertGreater(payload.resolved_count, 0)
+
+    def test_alternative_typed_dependency_follows_non_preferred_rule(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["dependencies"] = [{"relation": "obj", "head": "w2", "dependent": "obj"}]
+        record = with_declaration(record, declaration("dependencies", {"kind": "record"}))
+        record["canonical_analysis"]["typed_analysis"] = {
+            "kind": "dependency_grammar",
+            "framework": "meaningful_text",
+            "status": "established",
+        }
+        record["alternative_analyses"] = [{
+            "id": "alt1",
+            "framework": "hpsg",
+            "typed_analysis": {
+                "kind": "dependency_grammar",
+                "framework": "hpsg",
+                "status": "established",
+                "relations": [{
+                    "id": "alt-r1",
+                    "type": "dependency",
+                    "arity": "binary",
+                    "source": "word:w2",
+                    "target": "constituent:obj",
+                    "status": "established",
+                }],
+            },
+        }]
+        errors = validate_record(record, "alt-dep")
+        self.assertFalse(any("duplicates the canonical dependencies layer" in e for e in errors))
+
+
+class A1c1DuplicateRelationIDRendererTests(unittest.TestCase):
+    """A1c1-2: Renderer duplicate relation ID identity parity."""
+
+    def test_same_analysis_duplicate_relation_ids_neither_projects(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record = with_declaration(record, declaration("construction_relations", {"kind": "record"}))
+        typed = record["canonical_analysis"]["typed_analysis"]
+        typed["status"] = "established"
+        typed["relations"] = [
+            {
+                "id": "r1",
+                "type": "construction",
+                "arity": "binary",
+                "source": "word:w1",
+                "target": "constituent:subj",
+                "status": "established",
+            },
+            {
+                "id": "r1",
+                "type": "construction",
+                "arity": "binary",
+                "source": "word:w2",
+                "target": "constituent:obj",
+                "status": "established",
+            },
+        ]
+        errors = validate_record(record, "dup-id")
+        self.assertTrue(any("duplicate typed relation id" in e for e in errors))
+        projection = linguistic_projection(record)
+        typed_analysis = projection.get("canonical_analysis", {}).get("typed_analysis", {})
+        relations = typed_analysis.get("relations", [])
+        self.assertEqual(len(relations), 0)
+
+    def test_cross_analysis_duplicate_relation_ids_conflicting_do_not_project(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record = with_declaration(record, declaration("construction_relations", {"kind": "record"}))
+        typed = record["canonical_analysis"]["typed_analysis"]
+        typed["status"] = "established"
+        typed["relations"] = [{
+            "id": "r1",
+            "type": "construction",
+            "arity": "binary",
+            "source": "word:w1",
+            "target": "constituent:subj",
+            "status": "established",
+        }]
+        record["alternative_analyses"] = [{
+            "id": "alt1",
+            "framework": "hpsg",
+            "typed_analysis": {
+                "kind": "dependency_grammar",
+                "framework": "hpsg",
+                "status": "established",
+                "relations": [{
+                    "id": "r1",
+                    "type": "construction",
+                    "arity": "binary",
+                    "source": "word:w2",
+                    "target": "constituent:obj",
+                    "status": "established",
+                }],
+            },
+        }]
+        errors = validate_record(record, "cross-dup")
+        self.assertTrue(any("typed relation IDs must be unique" in e for e in errors))
+        projection = linguistic_projection(record)
+        canonical_relations = projection.get("canonical_analysis", {}).get("typed_analysis", {}).get("relations", [])
+        alt_relations = (
+            projection.get("alternative_analyses", [{}])[0]
+            .get("typed_analysis", {})
+            .get("relations", [])
+        )
+        self.assertEqual(len(canonical_relations), 0)
+        self.assertEqual(len(alt_relations), 0)
+
+    def test_unique_valid_sibling_relation_still_projects(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record = with_declaration(record, declaration("construction_relations", {"kind": "record"}))
+        typed = record["canonical_analysis"]["typed_analysis"]
+        typed["status"] = "established"
+        typed["relations"] = [
+            {
+                "id": "r1",
+                "type": "construction",
+                "arity": "binary",
+                "source": "word:w1",
+                "target": "constituent:subj",
+                "status": "established",
+            },
+            {
+                "id": "r2",
+                "type": "construction",
+                "arity": "binary",
+                "source": "word:w2",
+                "target": "constituent:obj",
+                "status": "established",
+            },
+        ]
+        projection = linguistic_projection(record)
+        typed_analysis = projection.get("canonical_analysis", {}).get("typed_analysis", {})
+        relations = typed_analysis.get("relations", [])
+        self.assertEqual(len(relations), 2)
+
+
+class A1c1EntityReferenceIntegrityTests(unittest.TestCase):
+    """A1c1-3: Valid analysis entity references."""
+
+    def test_relation_to_duplicate_local_entity_id_not_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record = with_declaration(record, declaration("construction_relations", {"kind": "record"}))
+        typed = record["canonical_analysis"]["typed_analysis"]
+        typed["status"] = "established"
+        typed["entities"] = [
+            {"id": "e1", "kind": "clause"},
+            {"id": "e1", "kind": "clause"},
+        ]
+        typed["relations"] = [{
+            "id": "r1",
+            "type": "construction",
+            "arity": "binary",
+            "source": "word:w1",
+            "target": {"namespace": "analysis", "id": "e1"},
+            "status": "established",
+        }]
+        payload = authoritative_payload(record, "construction_relations")
+        self.assertEqual(payload.resolved_count, 0)
+
+    def test_relation_to_duplicate_local_entity_id_not_rendered(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record = with_declaration(record, declaration("construction_relations", {"kind": "record"}))
+        typed = record["canonical_analysis"]["typed_analysis"]
+        typed["status"] = "established"
+        typed["entities"] = [
+            {"id": "e1", "kind": "clause"},
+            {"id": "e1", "kind": "clause"},
+        ]
+        typed["relations"] = [{
+            "id": "r1",
+            "type": "construction",
+            "arity": "binary",
+            "source": "word:w1",
+            "target": {"namespace": "analysis", "id": "e1"},
+            "status": "established",
+        }]
+        projection = linguistic_projection(record)
+        typed_analysis = projection.get("canonical_analysis", {}).get("typed_analysis", {})
+        relations = typed_analysis.get("relations", [])
+        self.assertEqual(len(relations), 0)
+
+    def test_relation_to_entity_missing_kind_not_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record = with_declaration(record, declaration("construction_relations", {"kind": "record"}))
+        typed = record["canonical_analysis"]["typed_analysis"]
+        typed["status"] = "established"
+        typed["entities"] = [{"id": "e1"}]
+        typed["relations"] = [{
+            "id": "r1",
+            "type": "construction",
+            "arity": "binary",
+            "source": "word:w1",
+            "target": {"namespace": "analysis", "id": "e1"},
+            "status": "established",
+        }]
+        payload = authoritative_payload(record, "construction_relations")
+        self.assertEqual(payload.resolved_count, 0)
+
+    def test_valid_sibling_entity_relation_still_works(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["annotation_scope"]["dimensions"] = [
+            declaration("construction_relations", {"kind": "record"}),
+            declaration("phrase_constituency", {"kind": "record"}),
+        ]
+        typed = record["canonical_analysis"]["typed_analysis"]
+        typed["status"] = "established"
+        typed["entities"] = [
+            {"id": "e2", "kind": "clause"},
+        ]
+        typed["relations"] = [
+            {
+                "id": "r1",
+                "type": "construction",
+                "arity": "binary",
+                "source": "word:w1",
+                "target": {"namespace": "analysis", "id": "ghost"},
+                "status": "established",
+            },
+            {
+                "id": "r2",
+                "type": "construction",
+                "arity": "binary",
+                "source": "word:w2",
+                "target": {"namespace": "analysis", "id": "e2"},
+                "status": "established",
+            },
+        ]
+        projection = linguistic_projection(record)
+        typed_analysis = projection.get("canonical_analysis", {}).get("typed_analysis", {})
+        relations = typed_analysis.get("relations", [])
+        relation_ids = {r.get("id") for r in relations}
+        self.assertNotIn("r1", relation_ids)
+        self.assertIn("r2", relation_ids)
+
+    def test_entity_in_another_analysis_cannot_satisfy_local_reference(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record = with_declaration(record, declaration("construction_relations", {"kind": "record"}))
+        typed = record["canonical_analysis"]["typed_analysis"]
+        typed["status"] = "established"
+        typed["entities"] = [{"id": "e1", "kind": "clause"}]
+        typed["relations"] = [{
+            "id": "r1",
+            "type": "construction",
+            "arity": "binary",
+            "source": "word:w1",
+            "target": {"namespace": "analysis", "id": "e1"},
+            "status": "established",
+        }]
+        record["alternative_analyses"] = [{
+            "id": "alt1",
+            "framework": "hpsg",
+            "typed_analysis": {
+                "kind": "dependency_grammar",
+                "framework": "hpsg",
+                "status": "established",
+                "relations": [{
+                    "id": "r2",
+                    "type": "construction",
+                    "arity": "binary",
+                    "source": "word:w2",
+                    "target": {"namespace": "analysis", "id": "e1"},
+                    "status": "established",
+                }],
+            },
+        }]
+        projection = linguistic_projection(record)
+        alt_relations = (
+            projection.get("alternative_analyses", [{}])[0]
+            .get("typed_analysis", {})
+            .get("relations", [])
+        )
+        self.assertEqual(len(alt_relations), 0)
+
+
+class A1c1UnresolvedRendererTests(unittest.TestCase):
+    """A1c1-4: Renderer requires resolved relation authority."""
+
+    def test_complete_unresolved_relation_omitted(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record = with_declaration(record, declaration("construction_relations", {"kind": "record"}))
+        typed = record["canonical_analysis"]["typed_analysis"]
+        typed["status"] = "established"
+        typed["relations"] = [{
+            "id": "r1",
+            "type": "construction",
+            "arity": "binary",
+            "source": "word:w1",
+            "target": "constituent:subj",
+            "status": "unresolved",
+        }]
+        projection = linguistic_projection(record)
+        typed_analysis = projection.get("canonical_analysis", {}).get("typed_analysis", {})
+        relations = typed_analysis.get("relations", [])
+        self.assertEqual(len(relations), 0)
+
+    def test_complete_review_required_relation_omitted(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record = with_declaration(record, declaration("construction_relations", {"kind": "record"}))
+        typed = record["canonical_analysis"]["typed_analysis"]
+        typed["status"] = "established"
+        typed["relations"] = [{
+            "id": "r1",
+            "type": "construction",
+            "arity": "binary",
+            "source": "word:w1",
+            "target": "constituent:subj",
+            "status": "review_required",
+        }]
+        projection = linguistic_projection(record)
+        typed_analysis = projection.get("canonical_analysis", {}).get("typed_analysis", {})
+        relations = typed_analysis.get("relations", [])
+        self.assertEqual(len(relations), 0)
+
+    def test_inherited_unresolved_typed_analysis_status_omitted(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record = with_declaration(record, declaration("construction_relations", {"kind": "record"}))
+        typed = record["canonical_analysis"]["typed_analysis"]
+        typed["status"] = "unresolved"
+        typed["relations"] = [{
+            "id": "r1",
+            "type": "construction",
+            "arity": "binary",
+            "source": "word:w1",
+            "target": "constituent:subj",
+        }]
+        projection = linguistic_projection(record)
+        typed_analysis = projection.get("canonical_analysis", {}).get("typed_analysis", {})
+        relations = typed_analysis.get("relations", [])
+        self.assertEqual(len(relations), 0)
+
+    def test_established_valid_complete_relation_still_projects(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record = with_declaration(record, declaration("construction_relations", {"kind": "record"}))
+        typed = record["canonical_analysis"]["typed_analysis"]
+        typed["status"] = "established"
+        typed["relations"] = [{
+            "id": "r1",
+            "type": "construction",
+            "arity": "binary",
+            "source": "word:w1",
+            "target": "constituent:subj",
+            "status": "established",
+        }]
+        projection = linguistic_projection(record)
+        typed_analysis = projection.get("canonical_analysis", {}).get("typed_analysis", {})
+        relations = typed_analysis.get("relations", [])
+        self.assertEqual(len(relations), 1)
+
+
+class A1c1PartialPresentTests(unittest.TestCase):
+    """A1c1-5: A6 partial-present preservation."""
+
+    def test_valid_partial_present_typed_relation_projected(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["annotation_scope"]["dimensions"] = [
+            declaration("dependencies", {"kind": "record"}, completeness="partial", evidence="present"),
+            declaration("phrase_constituency", {"kind": "record"}),
+        ]
+        typed = record["canonical_analysis"]["typed_analysis"]
+        typed["status"] = "established"
+        typed["relations"] = [{
+            "id": "r1",
+            "type": "dependency",
+            "arity": "binary",
+            "source": "word:w1",
+            "target": "constituent:subj",
+            "status": "established",
+        }]
+        from scripts.coverage_resolution import resolve_coverage, CoverageState
+        state = resolve_coverage(record, "dependencies")
+        self.assertIs(state, CoverageState.PARTIAL_COVERED)
+        projection = linguistic_projection(record)
+        typed_analysis = projection.get("canonical_analysis", {}).get("typed_analysis", {})
+        relations = typed_analysis.get("relations", [])
+        self.assertEqual(len(relations), 1)
+
+    def test_invalid_only_partial_present_not_positive(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["annotation_scope"]["dimensions"] = [
+            declaration("dependencies", {"kind": "record"}, completeness="partial", evidence="present"),
+            declaration("phrase_constituency", {"kind": "record"}),
+        ]
+        typed = record["canonical_analysis"]["typed_analysis"]
+        typed["status"] = "established"
+        typed["relations"] = [{
+            "id": "r1",
+            "type": "dependency",
+            "arity": "binary",
+            "source": "word:ghost",
+            "target": "constituent:subj",
+            "status": "established",
+        }]
+        projection = linguistic_projection(record)
+        typed_analysis = projection.get("canonical_analysis", {}).get("typed_analysis", {})
+        relations = typed_analysis.get("relations", [])
+        self.assertEqual(len(relations), 0)
+
+    def test_unresolved_only_partial_present_not_positive(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["annotation_scope"]["dimensions"] = [
+            declaration("dependencies", {"kind": "record"}, completeness="partial", evidence="present"),
+            declaration("phrase_constituency", {"kind": "record"}),
+        ]
+        typed = record["canonical_analysis"]["typed_analysis"]
+        typed["status"] = "established"
+        typed["relations"] = [{
+            "id": "r1",
+            "type": "dependency",
+            "arity": "binary",
+            "source": "word:w1",
+            "target": "constituent:subj",
+            "status": "unresolved",
+        }]
+        projection = linguistic_projection(record)
+        typed_analysis = projection.get("canonical_analysis", {}).get("typed_analysis", {})
+        relations = typed_analysis.get("relations", [])
+        self.assertEqual(len(relations), 0)
+
+
+class A1c1SiblingIsolationTests(unittest.TestCase):
+    """A1c1: Complete sibling isolation."""
+
+    def test_complete_valid_relation_plus_invalid_sibling(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record = with_declaration(record, declaration("construction_relations", {"kind": "record"}))
+        typed = record["canonical_analysis"]["typed_analysis"]
+        typed["status"] = "established"
+        typed["relations"] = [
+            {
+                "id": "r1",
+                "type": "construction",
+                "arity": "binary",
+                "source": "word:w1",
+                "target": "constituent:subj",
+                "status": "established",
+            },
+            {
+                "id": "r2",
+                "type": "construction",
+                "arity": "binary",
+                "source": "word:ghost",
+                "target": "constituent:obj",
+                "status": "established",
+            },
+        ]
+        projection = linguistic_projection(record)
+        typed_analysis = projection.get("canonical_analysis", {}).get("typed_analysis", {})
+        relations = typed_analysis.get("relations", [])
+        relation_ids = {r.get("id") for r in relations}
+        self.assertIn("r1", relation_ids)
+        self.assertNotIn("r2", relation_ids)
+        decision = resolve_scoring_eligibility(record, "construction_relations")
+        self.assertFalse(decision.scoreable)
+
+
 if __name__ == "__main__":
     unittest.main()

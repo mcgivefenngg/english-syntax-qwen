@@ -53,6 +53,9 @@ try:
         validate_typed_relation_structure,
         validate_typed_analysis_container,
         get_analysis_entity_ids,
+        valid_analysis_entity_ids,
+        TypedRelationValidationContext,
+        _canonical_dependency_pairs,
         CANONICAL_SCALAR_RELATION_TYPES,
     )
 except ImportError:
@@ -60,6 +63,9 @@ except ImportError:
         validate_typed_relation_structure,
         validate_typed_analysis_container,
         get_analysis_entity_ids,
+        valid_analysis_entity_ids,
+        TypedRelationValidationContext,
+        _canonical_dependency_pairs,
         CANONICAL_SCALAR_RELATION_TYPES,
     )
 
@@ -658,17 +664,17 @@ def _clause_status(record: dict[str, Any], item: dict[str, Any]) -> str:
     return "resolved"
 
 
-def _typed_analyses(record: dict[str, Any]) -> list[tuple[dict[str, Any], dict[str, Any]]]:
-    analyses: list[tuple[dict[str, Any], dict[str, Any]]] = []
+def _typed_analyses(record: dict[str, Any]) -> list[tuple[dict[str, Any], dict[str, Any], bool]]:
+    analyses: list[tuple[dict[str, Any], dict[str, Any], bool]] = []
     for field_name in ("canonical_analysis", "preferred_analysis"):
         analysis = record.get(field_name)
         if isinstance(analysis, dict) and isinstance(analysis.get("typed_analysis"), dict):
-            analyses.append((analysis["typed_analysis"], analysis))
+            analyses.append((analysis["typed_analysis"], analysis, True))
     alternatives = record.get("alternative_analyses")
     if isinstance(alternatives, list):
         for analysis in alternatives:
             if isinstance(analysis, dict) and isinstance(analysis.get("typed_analysis"), dict):
-                analyses.append((analysis["typed_analysis"], analysis))
+                analyses.append((analysis["typed_analysis"], analysis, False))
     return analyses
 
 
@@ -677,34 +683,28 @@ def _typed_relation_status(
     typed: dict[str, Any],
     relation: dict[str, Any],
     *,
-    relation_id_occurrences: dict[str, int] | None = None,
+    context: TypedRelationValidationContext | None = None,
 ) -> str:
     """Comprehensive typed relation status with structural validation.
 
     A1c: Validator-invalid typed relations must not be classified as resolved.
+    A1c1: Uses shared context for parity across validator/collector/renderer.
     """
     if not isinstance(relation, dict):
         return "missing"
 
-    # Check container validity first
     if not validate_typed_analysis_container(typed):
         return "missing"
 
-    # Check for duplicate relation IDs
-    relation_id = relation.get("id")
-    if isinstance(relation_id, str) and relation_id_occurrences is not None:
-        if relation_id_occurrences.get(relation_id, 0) > 1:
-            return "missing"
+    ctx = context if context is not None else TypedRelationValidationContext(
+        valid_analysis_entity_ids=valid_analysis_entity_ids(typed),
+    )
 
-    # Get analysis-local entity IDs for reference validation
-    analysis_entity_ids = get_analysis_entity_ids(typed)
-
-    # Use the comprehensive structural validation
     return validate_typed_relation_structure(
         relation,
         typed,
         record,
-        analysis_entity_ids=analysis_entity_ids,
+        context=ctx,
     )
 
 
@@ -721,7 +721,7 @@ def _typed_relation_items(
 
     # Compute relation ID occurrences across all analyses for duplicate detection
     relation_id_occurrences: dict[str, int] = {}
-    for typed, _analysis in _typed_analyses(record):
+    for typed, _analysis, _preferred in _typed_analyses(record):
         relations = typed.get("relations")
         if not isinstance(relations, list):
             continue
@@ -731,10 +731,18 @@ def _typed_relation_items(
                 if isinstance(relation_id, str) and relation_id:
                     relation_id_occurrences[relation_id] = relation_id_occurrences.get(relation_id, 0) + 1
 
-    for typed, _analysis in _typed_analyses(record):
+    dep_pairs = _canonical_dependency_pairs(record)
+
+    for typed, _analysis, preferred_authority in _typed_analyses(record):
         relations = typed.get("relations")
         if not isinstance(relations, list):
             continue
+        ctx = TypedRelationValidationContext(
+            preferred_authority=preferred_authority,
+            relation_id_occurrences=relation_id_occurrences,
+            valid_analysis_entity_ids=valid_analysis_entity_ids(typed),
+            canonical_dependency_pairs=dep_pairs,
+        )
         for index, relation in enumerate(relations):
             if not isinstance(relation, dict) or relation.get("type") not in relation_types:
                 continue
@@ -753,7 +761,7 @@ def _typed_relation_items(
                 record,
                 typed,
                 relation,
-                relation_id_occurrences=relation_id_occurrences,
+                context=ctx,
             )
             accumulator.add(identifier, "typed_relation", status)
 
@@ -1065,7 +1073,7 @@ def typed_argument_owner_dimensions(argument: Any) -> frozenset[str]:
 def typed_analysis_relation_entries(record: dict[str, Any]) -> list[tuple[tuple[str | int, ...], dict[str, Any]]]:
     """Return every typed relation paired with its analysis-local container path."""
     entries: list[tuple[tuple[str | int, ...], dict[str, Any]]] = []
-    for analysis_path, typed in _typed_analysis_paths(record):
+    for analysis_path, typed, _preferred in _typed_analysis_paths(record):
         relations = typed.get("relations")
         if not isinstance(relations, list):
             continue
@@ -1179,7 +1187,7 @@ def _construction_typed_payload_items(
 
     # Compute relation ID occurrences across all analyses for duplicate detection
     relation_id_occurrences: dict[str, int] = {}
-    for _analysis_path, typed in _typed_analysis_paths(record):
+    for _analysis_path, typed, _preferred in _typed_analysis_paths(record):
         relations = typed.get("relations")
         if not isinstance(relations, list):
             continue
@@ -1189,7 +1197,15 @@ def _construction_typed_payload_items(
                 if isinstance(relation_id, str) and relation_id:
                     relation_id_occurrences[relation_id] = relation_id_occurrences.get(relation_id, 0) + 1
 
-    for analysis_path, typed in _typed_analysis_paths(record):
+    dep_pairs = _canonical_dependency_pairs(record)
+
+    for analysis_path, typed, preferred_authority in _typed_analysis_paths(record):
+        ctx = TypedRelationValidationContext(
+            preferred_authority=preferred_authority,
+            relation_id_occurrences=relation_id_occurrences,
+            valid_analysis_entity_ids=valid_analysis_entity_ids(typed),
+            canonical_dependency_pairs=dep_pairs,
+        )
         if relation_types and _has_field(spec, "typed_relation"):
             relations = typed.get("relations")
             if isinstance(relations, list):
@@ -1205,7 +1221,7 @@ def _construction_typed_payload_items(
                             record,
                             typed,
                             relation,
-                            relation_id_occurrences=relation_id_occurrences,
+                            context=ctx,
                         ),
                         path=analysis_path + ("relations", index),
                     ))
@@ -1249,17 +1265,17 @@ def _construction_typed_payload_items(
     return items
 
 
-def _typed_analysis_paths(record: dict[str, Any]) -> list[tuple[tuple[str | int, ...], dict[str, Any]]]:
-    paths: list[tuple[tuple[str | int, ...], dict[str, Any]]] = []
+def _typed_analysis_paths(record: dict[str, Any]) -> list[tuple[tuple[str | int, ...], dict[str, Any], bool]]:
+    paths: list[tuple[tuple[str | int, ...], dict[str, Any], bool]] = []
     for field_name in ("canonical_analysis", "preferred_analysis"):
         analysis = record.get(field_name)
         if isinstance(analysis, dict) and isinstance(analysis.get("typed_analysis"), dict):
-            paths.append(((field_name, "typed_analysis"), analysis["typed_analysis"]))
+            paths.append(((field_name, "typed_analysis"), analysis["typed_analysis"], True))
     alternatives = record.get("alternative_analyses")
     if isinstance(alternatives, list):
         for index, analysis in enumerate(alternatives):
             if isinstance(analysis, dict) and isinstance(analysis.get("typed_analysis"), dict):
-                paths.append((("alternative_analyses", index, "typed_analysis"), analysis["typed_analysis"]))
+                paths.append((("alternative_analyses", index, "typed_analysis"), analysis["typed_analysis"], False))
     return paths
 
 
