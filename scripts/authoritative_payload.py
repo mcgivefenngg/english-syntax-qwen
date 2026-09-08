@@ -17,9 +17,31 @@ except ImportError:
     from scripts.collection_contract import normalize_predicate_reference, validate_coverage_target
 
 try:
-    from data_common import LEXICAL_CATEGORIES, PHRASE_CATEGORIES, SEMANTIC_ROLES
+    from data_common import (
+        CLAUSE_CONSTRUCTIONS,
+        CLAUSE_FINITE_VALUES,
+        CLAUSE_FORMS,
+        CLAUSE_INTEGRATIONS,
+        LEXICAL_CATEGORIES,
+        NOMINAL_SUBJECT_CATEGORIES,
+        PHRASE_CATEGORIES,
+        PREDICAND_KINDS,
+        PREDICAND_TARGET_REQUIRED_KINDS,
+        SEMANTIC_ROLES,
+    )
 except ImportError:
-    from scripts.data_common import LEXICAL_CATEGORIES, PHRASE_CATEGORIES, SEMANTIC_ROLES
+    from scripts.data_common import (
+        CLAUSE_CONSTRUCTIONS,
+        CLAUSE_FINITE_VALUES,
+        CLAUSE_FORMS,
+        CLAUSE_INTEGRATIONS,
+        LEXICAL_CATEGORIES,
+        NOMINAL_SUBJECT_CATEGORIES,
+        PHRASE_CATEGORIES,
+        PREDICAND_KINDS,
+        PREDICAND_TARGET_REQUIRED_KINDS,
+        SEMANTIC_ROLES,
+    )
 
 try:
     from dimension_registry import DIMENSION_REGISTRY, DimensionSpec, PayloadSpec, dimension_spec
@@ -328,23 +350,187 @@ def _word_status(word: dict[str, Any]) -> str:
     return "missing"
 
 
+def _ref_kind(objects: dict[str, dict[str, Any]], value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    item = objects.get(value)
+    return item.get("node_kind") if isinstance(item, dict) else None
+
+
+def _clause_ids(record: dict[str, Any]) -> set[str]:
+    clauses = record.get("clauses")
+    if not isinstance(clauses, list):
+        return set()
+    return {item["id"] for item in clauses if isinstance(item, dict) and isinstance(item.get("id"), str)}
+
+
+def _payload_span(record: dict[str, Any], item: dict[str, Any]) -> tuple[int, int] | None:
+    """Structural span under the canonical contract: valid half-open token span
+    that does not terminate at a punctuation token."""
+    span = _item_span(record, item)
+    if span is None:
+        return None
+    words = record.get("words")
+    if isinstance(words, list) and 0 < span[1] <= len(words):
+        last = words[span[1] - 1]
+        if isinstance(last, dict) and last.get("lexical_category") == "punctuation":
+            return None
+    return span
+
+
+def _optional_typed_reference(objects: dict[str, dict[str, Any]], item: dict[str, Any], field: str, kinds: set[str]) -> bool:
+    if field not in item or item[field] is None:
+        return True
+    return _ref_kind(objects, item[field]) in kinds
+
+
 def _constituent_status(record: dict[str, Any], item: dict[str, Any]) -> str:
+    """Canonical payload status for one constituent-family node.
+
+    Resolved requires every constituent-owned payload property to satisfy the
+    canonical contract: identity, structural span, phrase category or existing
+    clause reference, span_relation agreement, and head/parent reference kinds.
+    Function and realization are syntactic-function-owned and stay out of scope.
+    """
     if not isinstance(item.get("id"), str) or not item.get("id"):
         return "missing"
+    if _payload_span(record, item) is None:
+        return "missing"
+    objects = _record_objects(record)
     node_kind = item.get("node_kind")
     if node_kind == "phrase":
-        return "resolved" if _item_span(record, item) is not None and item.get("phrase_category") in PHRASE_CATEGORIES and item.get("phrase_category") != "word" else "missing"
-    if node_kind == "clause":
-        return "resolved" if _item_span(record, item) is not None and isinstance(item.get("clause_ref"), str) and item.get("clause_ref") else "missing"
-    return "missing"
+        category = item.get("phrase_category")
+        if category not in PHRASE_CATEGORIES or category == "word":
+            return "missing"
+    elif node_kind == "clause":
+        if item.get("phrase_category") is not None:
+            return "missing"
+        clause_ref = item.get("clause_ref")
+        if not isinstance(clause_ref, str) or clause_ref not in _clause_ids(record):
+            return "missing"
+        if "span_relation" in item:
+            realization = item.get("realization")
+            relation = realization.get("relation") if isinstance(realization, dict) else None
+            if item.get("span_relation") != relation:
+                return "missing"
+    else:
+        return "missing"
+    if not _optional_typed_reference(objects, item, "head", {"word"}):
+        return "missing"
+    if not _optional_typed_reference(objects, item, "parent", {"phrase", "clause"}):
+        return "missing"
+    return "resolved"
+
+
+def _integration_is_canonical(integration: Any) -> bool:
+    return (
+        isinstance(integration, list)
+        and bool(integration)
+        and all(isinstance(value, str) and value in CLAUSE_INTEGRATIONS for value in integration)
+        and len(integration) == len(set(integration))
+        and ("root" not in integration or len(integration) == 1)
+        and ("unresolved" not in integration or len(integration) == 1)
+    )
+
+
+def _clause_subject_is_valid(objects: dict[str, dict[str, Any]], subject: Any) -> bool:
+    if subject is None:
+        return True
+    kind = _ref_kind(objects, subject)
+    if kind not in {"word", "phrase", "clause"}:
+        return False
+    target = objects[subject]
+    if kind == "word":
+        return target.get("lexical_category") in NOMINAL_SUBJECT_CATEGORIES
+    if kind == "phrase":
+        return target.get("phrase_category") == "NP"
+    return True
+
+
+def _clause_markers_are_valid(record: dict[str, Any], objects: dict[str, dict[str, Any]], item: dict[str, Any], span: tuple[int, int]) -> bool:
+    if "marker_ids" not in item:
+        return True
+    markers = item["marker_ids"]
+    if not isinstance(markers, list):
+        return False
+    words = record.get("words")
+    words = words if isinstance(words, list) else []
+    for marker in markers:
+        if _ref_kind(objects, marker) != "word":
+            return False
+        index = next(
+            (position for position, word in enumerate(words) if isinstance(word, dict) and word.get("id") == marker),
+            None,
+        )
+        if index is not None and not span[0] <= index < span[1]:
+            return False
+    return True
+
+
+def _integration_parent_is_valid(objects: dict[str, dict[str, Any]], clause_ids: set[str], parent: Any) -> bool:
+    if parent is None:
+        return True
+    return isinstance(parent, str) and parent in clause_ids and _ref_kind(objects, parent) == "clause"
+
+
+def _predicand_is_valid(objects: dict[str, dict[str, Any]], value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value in objects
+    if not isinstance(value, dict):
+        return False
+    kind = value.get("kind")
+    if not isinstance(kind, str) or kind not in PREDICAND_KINDS:
+        return False
+    target = value.get("target")
+    if kind in PREDICAND_TARGET_REQUIRED_KINDS:
+        return isinstance(target, str) and target in objects
+    return target is None or (isinstance(target, str) and target in objects)
 
 
 def _clause_status(record: dict[str, Any], item: dict[str, Any]) -> str:
-    if not isinstance(item.get("id"), str) or not item.get("id") or _item_span(record, item) is None:
+    """Canonical payload status for one clause-family node.
+
+    Resolved requires every clause-owned payload property to satisfy the
+    canonical contract: identity, structural span, controlled finiteness,
+    clause_construction, clause_form, and integration vocabularies plus the
+    subject/head/marker_ids/integration_parent/predicand reference rules.
+    Explicit canonical unresolved authority stays unresolved, never resolved;
+    contradictory content (such as mixed integration values) is missing.
+    """
+    if not isinstance(item.get("id"), str) or not item.get("id"):
         return "missing"
-    if item.get("clause_construction") == "unresolved" or item.get("finiteness") == "unspecified" or "unresolved" in (item.get("integration") or []):
+    if item.get("node_kind") != "clause":
+        return "missing"
+    span = _payload_span(record, item)
+    if span is None:
+        return "missing"
+    integration = item.get("integration")
+    if not _integration_is_canonical(integration):
+        return "missing"
+    if item.get("clause_construction") == "unresolved" or item.get("finiteness") == "unspecified" or integration == ["unresolved"]:
         return "unresolved"
-    if item.get("finiteness") not in {"finite", "nonfinite", "verbless"} or not isinstance(item.get("clause_construction"), str) or not isinstance(item.get("integration"), list) or not item.get("integration"):
+    finiteness = item.get("finiteness")
+    if finiteness not in CLAUSE_FINITE_VALUES or item.get("clause_construction") not in CLAUSE_CONSTRUCTIONS:
+        return "missing"
+    clause_form = item.get("clause_form")
+    if finiteness == "nonfinite":
+        if clause_form not in CLAUSE_FORMS:
+            return "missing"
+    elif clause_form is not None:
+        return "missing"
+    objects = _record_objects(record)
+    if not _clause_subject_is_valid(objects, item.get("subject")):
+        return "missing"
+    head = item.get("head")
+    if head is not None and (not isinstance(head, str) or head not in objects):
+        return "missing"
+    if not _clause_markers_are_valid(record, objects, item, span):
+        return "missing"
+    if not _integration_parent_is_valid(objects, _clause_ids(record), item.get("integration_parent")):
+        return "missing"
+    if not _predicand_is_valid(objects, item.get("predicand")):
         return "missing"
     return "resolved"
 

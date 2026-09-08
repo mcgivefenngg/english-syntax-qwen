@@ -16,8 +16,9 @@ from scripts.authoritative_payload import (
     typed_argument_owner_dimensions,
     typed_relation_owner_dimensions,
 )
+from scripts.canonical_schema import canonical_schema_issues
 from scripts.data_common import read_jsonl
-from scripts.coverage_resolution import resolve_scoring_eligibility
+from scripts.coverage_resolution import CoverageState, resolve_scoring_eligibility
 from scripts.render_sft import linguistic_projection
 from scripts.validate_dataset import validate_record
 
@@ -444,6 +445,278 @@ class AuthoritativePayloadContractTests(unittest.TestCase):
         reverse = authoritative_payload(reverse_record, "construction_relations")
         self.assertEqual(forward, reverse)
         self.assertIs(authoritative_payload_state(reverse_record, "dependencies"), AuthoritativePayloadState.CONFIRMED_EMPTY)
+
+
+class CanonicalNodePayloadIntegrityTests(unittest.TestCase):
+    """A1a: validator-invalid canonical nodes are never resolved positive payload."""
+
+    def mutated_record(self, field: str, value: Any, collection: str = "constituents", index: int = 0) -> dict[str, Any]:
+        record = copy.deepcopy(FIXTURE)
+        record[collection][index][field] = copy.deepcopy(value)
+        return record
+
+    def subordinate_clause(self) -> dict[str, Any]:
+        return {
+            "id": "c1",
+            "node_kind": "clause",
+            "span": {"start": 3, "end": 5},
+            "finiteness": "finite",
+            "clause_construction": "relative",
+            "integration": ["subordinate"],
+            "integration_parent": "c0",
+        }
+
+    def clause_wrapper(self, clause_ref: str, **extra: Any) -> dict[str, Any]:
+        wrapper: dict[str, Any] = {
+            "id": "emb",
+            "node_kind": "clause",
+            "clause_ref": clause_ref,
+            "span": {"start": 3, "end": 5},
+            "function": "complement",
+            "realization": {"clause_ref": clause_ref, "relation": "other"},
+        }
+        wrapper.update(extra)
+        return wrapper
+
+    def assert_not_resolved(self, record: dict[str, Any], dimension: str, target: str) -> None:
+        payload = authoritative_payload(record, dimension, target)
+        self.assertIs(payload.state, AuthoritativePayloadState.ABSENT)
+        self.assertFalse(payload.has_resolved_content)
+        self.assertEqual(payload.missing_count, 1)
+
+    def test_valid_phrase_constituent_remains_resolved(self) -> None:
+        payload = authoritative_payload(FIXTURE, "phrase_constituency", "subj")
+        self.assertIs(payload.state, AuthoritativePayloadState.PRESENT)
+        self.assertTrue(payload.fully_resolved)
+        self.assertEqual(validate_record(FIXTURE, "valid-constituent"), [])
+
+    def test_dangling_constituent_head_is_not_resolved(self) -> None:
+        record = self.mutated_record("head", "ghost")
+        self.assertFalse(canonical_schema_issues(record))
+        self.assertTrue(any("constituent.head" in error for error in validate_record(record, "dangling-head")))
+        self.assert_not_resolved(record, "phrase_constituency", "subj")
+
+    def test_wrong_kind_constituent_head_is_not_resolved(self) -> None:
+        record = self.mutated_record("head", "obj")
+        self.assertFalse(canonical_schema_issues(record))
+        self.assertTrue(any("constituent.head" in error for error in validate_record(record, "wrong-kind-head")))
+        self.assert_not_resolved(record, "phrase_constituency", "subj")
+
+    def test_dangling_constituent_parent_is_not_resolved(self) -> None:
+        record = self.mutated_record("parent", "ghost")
+        self.assertFalse(canonical_schema_issues(record))
+        self.assertTrue(any("constituent.parent" in error for error in validate_record(record, "dangling-parent")))
+        self.assert_not_resolved(record, "phrase_constituency", "subj")
+
+    def test_word_valued_constituent_parent_is_not_resolved(self) -> None:
+        record = self.mutated_record("parent", "w1")
+        self.assertFalse(canonical_schema_issues(record))
+        self.assertTrue(any("constituent.parent" in error for error in validate_record(record, "word-parent")))
+        self.assert_not_resolved(record, "phrase_constituency", "subj")
+
+    def test_invalid_constituent_target_is_not_scoreable(self) -> None:
+        record = self.mutated_record("head", "ghost")
+        decision = resolve_scoring_eligibility(record, "phrase_constituency", "subj")
+        self.assertFalse(decision.scoreable)
+        self.assertIs(decision.coverage_state, CoverageState.PARTIAL_UNCOVERED)
+
+    def test_clause_wrapper_with_dangling_reference_is_not_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["constituents"].append(self.clause_wrapper("ghost"))
+        self.assertFalse(canonical_schema_issues(record))
+        self.assertTrue(any("must reference a known clause" in error for error in validate_record(record, "wrapper-ghost")))
+        self.assert_not_resolved(record, "phrase_constituency", "emb")
+
+    def test_clause_wrapper_with_existing_reference_remains_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["constituents"].append(self.clause_wrapper("c0"))
+        self.assertEqual(validate_record(record, "wrapper-valid"), [])
+        payload = authoritative_payload(record, "phrase_constituency", "emb")
+        self.assertIs(payload.state, AuthoritativePayloadState.PRESENT)
+        self.assertTrue(payload.fully_resolved)
+
+    def test_clause_wrapper_span_relation_must_agree_with_realization(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["constituents"].append(self.clause_wrapper("c0", span_relation="same_span_alias"))
+        self.assertFalse(canonical_schema_issues(record))
+        self.assertTrue(any("span_relation must agree" in error for error in validate_record(record, "wrapper-span-relation")))
+        self.assert_not_resolved(record, "phrase_constituency", "emb")
+
+    def test_valid_clause_remains_resolved(self) -> None:
+        payload = authoritative_payload(FIXTURE, "clause_ontology", "c0")
+        self.assertIs(payload.state, AuthoritativePayloadState.PRESENT)
+        self.assertTrue(payload.fully_resolved)
+
+    def test_contradictory_root_integration_is_not_resolved(self) -> None:
+        record = self.mutated_record("integration", ["root", "subordinate"], collection="clauses")
+        self.assertFalse(canonical_schema_issues(record))
+        self.assertTrue(any("root integration cannot mix" in error for error in validate_record(record, "mixed-root")))
+        self.assert_not_resolved(record, "clause_ontology", "c0")
+
+    def test_mixed_unresolved_integration_is_invalid_not_unresolved(self) -> None:
+        record = self.mutated_record("integration", ["unresolved", "subordinate"], collection="clauses")
+        self.assertFalse(canonical_schema_issues(record))
+        self.assertTrue(any("cannot mix unresolved" in error for error in validate_record(record, "mixed-unresolved")))
+        payload = authoritative_payload(record, "clause_ontology", "c0")
+        self.assertIs(payload.state, AuthoritativePayloadState.ABSENT)
+        self.assertEqual(payload.unresolved_count, 0)
+        self.assertEqual(payload.missing_count, 1)
+
+    def test_explicit_unresolved_clause_authority_stays_unresolved(self) -> None:
+        for field, value in (
+            ("clause_construction", "unresolved"),
+            ("finiteness", "unspecified"),
+            ("integration", ["unresolved"]),
+        ):
+            with self.subTest(field=field):
+                record = self.mutated_record(field, value, collection="clauses")
+                payload = authoritative_payload(record, "clause_ontology", "c0")
+                self.assertIs(payload.state, AuthoritativePayloadState.UNRESOLVED_ONLY)
+                self.assertFalse(payload.has_resolved_content)
+                self.assertEqual(payload.unresolved_count, 1)
+                self.assertEqual(payload.missing_count, 0)
+
+    def test_dangling_clause_subject_is_not_resolved(self) -> None:
+        record = self.mutated_record("subject", "ghost", collection="clauses")
+        self.assertFalse(canonical_schema_issues(record))
+        self.assertTrue(any("subject must reference a known ID" in error for error in validate_record(record, "dangling-subject")))
+        self.assert_not_resolved(record, "clause_ontology", "c0")
+
+    def test_nonnominal_clause_subject_is_not_resolved(self) -> None:
+        for subject in ("w2", "w5"):
+            with self.subTest(subject=subject):
+                record = self.mutated_record("subject", subject, collection="clauses")
+                self.assertFalse(canonical_schema_issues(record))
+                self.assertTrue(any("must be nominal" in error for error in validate_record(record, "nonnominal-subject")))
+                self.assert_not_resolved(record, "clause_ontology", "c0")
+
+    def test_nominal_word_and_np_phrase_subjects_remain_resolved(self) -> None:
+        for subject in ("w1", "subj"):
+            with self.subTest(subject=subject):
+                record = self.mutated_record("subject", subject, collection="clauses")
+                self.assertEqual(validate_record(record, "valid-subject"), [])
+                payload = authoritative_payload(record, "clause_ontology", "c0")
+                self.assertIs(payload.state, AuthoritativePayloadState.PRESENT)
+                self.assertTrue(payload.fully_resolved)
+
+    def test_dangling_clause_head_is_not_resolved(self) -> None:
+        record = self.mutated_record("head", "ghost", collection="clauses")
+        self.assertFalse(canonical_schema_issues(record))
+        self.assertTrue(any("head must reference a known ID" in error for error in validate_record(record, "dangling-clause-head")))
+        self.assert_not_resolved(record, "clause_ontology", "c0")
+
+    def test_known_clause_head_remains_resolved(self) -> None:
+        record = self.mutated_record("head", "w2", collection="clauses")
+        self.assertEqual(validate_record(record, "known-clause-head"), [])
+        payload = authoritative_payload(record, "clause_ontology", "c0")
+        self.assertIs(payload.state, AuthoritativePayloadState.PRESENT)
+        self.assertTrue(payload.fully_resolved)
+
+    def test_dangling_and_nonword_clause_markers_are_not_resolved(self) -> None:
+        for markers in (["ghost"], ["subj"]):
+            with self.subTest(markers=markers):
+                record = self.mutated_record("marker_ids", markers, collection="clauses")
+                self.assertFalse(canonical_schema_issues(record))
+                self.assertTrue(any("marker_ids" in error for error in validate_record(record, "bad-markers")))
+                self.assert_not_resolved(record, "clause_ontology", "c0")
+
+    def test_clause_marker_outside_span_is_not_resolved(self) -> None:
+        record = self.mutated_record("marker_ids", ["w5"], collection="clauses")
+        self.assertFalse(canonical_schema_issues(record))
+        self.assertTrue(any("inside clause span" in error for error in validate_record(record, "outside-marker")))
+        self.assert_not_resolved(record, "clause_ontology", "c0")
+
+    def test_word_marker_inside_clause_span_remains_resolved(self) -> None:
+        record = self.mutated_record("marker_ids", ["w2"], collection="clauses")
+        self.assertEqual(validate_record(record, "inside-marker"), [])
+        payload = authoritative_payload(record, "clause_ontology", "c0")
+        self.assertIs(payload.state, AuthoritativePayloadState.PRESENT)
+        self.assertTrue(payload.fully_resolved)
+
+    def test_dangling_and_wrong_kind_integration_parent_are_not_resolved(self) -> None:
+        for parent in ("ghost", "subj"):
+            with self.subTest(parent=parent):
+                record = self.mutated_record("integration_parent", parent, collection="clauses")
+                self.assertFalse(canonical_schema_issues(record))
+                self.assertTrue(any("integration_parent" in error for error in validate_record(record, "bad-integration-parent")))
+                self.assert_not_resolved(record, "clause_ontology", "c0")
+
+    def test_invalid_finiteness_clause_form_combinations_are_not_resolved(self) -> None:
+        finite_with_form = self.mutated_record("clause_form", "to_infinitival", collection="clauses")
+        self.assertFalse(canonical_schema_issues(finite_with_form))
+        self.assertTrue(any("clause_form is only permitted" in error for error in validate_record(finite_with_form, "finite-form")))
+        self.assert_not_resolved(finite_with_form, "clause_ontology", "c0")
+
+        nonfinite_without_form = self.mutated_record("finiteness", "nonfinite", collection="clauses")
+        self.assertFalse(canonical_schema_issues(nonfinite_without_form))
+        self.assertTrue(any("nonfinite clauses require" in error for error in validate_record(nonfinite_without_form, "nonfinite-no-form")))
+        self.assert_not_resolved(nonfinite_without_form, "clause_ontology", "c0")
+
+    def test_nonfinite_clause_with_known_form_remains_resolved(self) -> None:
+        record = self.mutated_record("finiteness", "nonfinite", collection="clauses")
+        record["clauses"][0]["clause_form"] = "to_infinitival"
+        self.assertEqual(validate_record(record, "nonfinite-form"), [])
+        payload = authoritative_payload(record, "clause_ontology", "c0")
+        self.assertIs(payload.state, AuthoritativePayloadState.PRESENT)
+        self.assertTrue(payload.fully_resolved)
+
+    def test_invalid_clause_target_is_not_scoreable(self) -> None:
+        record = self.mutated_record("integration", ["root", "subordinate"], collection="clauses")
+        decision = resolve_scoring_eligibility(record, "clause_ontology", "c0")
+        self.assertFalse(decision.scoreable)
+        self.assertIsNone(decision.coverage_state)
+
+    def test_invalid_constituent_does_not_poison_sibling_target(self) -> None:
+        record = self.mutated_record("head", "ghost")
+        invalid = authoritative_payload(record, "phrase_constituency", "subj")
+        valid = authoritative_payload(record, "phrase_constituency", "obj")
+        self.assertIs(invalid.state, AuthoritativePayloadState.ABSENT)
+        self.assertIs(valid.state, AuthoritativePayloadState.PRESENT)
+        self.assertTrue(valid.fully_resolved)
+        self.assertFalse(resolve_scoring_eligibility(record, "phrase_constituency", "subj").scoreable)
+        self.assertTrue(resolve_scoring_eligibility(record, "phrase_constituency", "obj").scoreable)
+
+    def test_invalid_clause_does_not_poison_sibling_clause_target(self) -> None:
+        record = self.mutated_record("integration", ["root", "subordinate"], collection="clauses")
+        record["clauses"].append(self.subordinate_clause())
+        invalid = authoritative_payload(record, "clause_ontology", "c0")
+        valid = authoritative_payload(record, "clause_ontology", "c1")
+        self.assertIs(invalid.state, AuthoritativePayloadState.ABSENT)
+        self.assertIs(valid.state, AuthoritativePayloadState.PRESENT)
+        self.assertTrue(valid.fully_resolved)
+        self.assertFalse(resolve_scoring_eligibility(record, "clause_ontology", "c0").scoreable)
+        decision = resolve_scoring_eligibility(record, "clause_ontology", "c1")
+        self.assertTrue(decision.scoreable)
+        self.assertIs(decision.coverage_state, CoverageState.PARTIAL_COVERED)
+
+    def test_record_complete_with_invalid_constituent_is_present_but_not_fully_resolved(self) -> None:
+        record = with_declaration(FIXTURE, declaration("phrase_constituency", {"kind": "record"}))
+        record["constituents"][0]["head"] = "ghost"
+        payload = authoritative_payload(record, "phrase_constituency")
+        self.assertIs(payload.state, AuthoritativePayloadState.PRESENT)
+        self.assertFalse(payload.fully_resolved)
+        self.assertEqual(payload.resolved_count, 1)
+        self.assertEqual(payload.missing_count, 1)
+        self.assertTrue(any(
+            "complete coverage requires all applicable authoritative payload" in error
+            for error in validate_record(record, "complete-invalid-constituent")
+        ))
+        decision = resolve_scoring_eligibility(record, "phrase_constituency")
+        self.assertFalse(decision.scoreable)
+        self.assertIsNone(decision.coverage_state)
+
+    def test_record_complete_with_invalid_clause_is_present_but_not_fully_resolved(self) -> None:
+        record = with_declaration(FIXTURE, declaration("clause_ontology", {"kind": "record"}))
+        record["clauses"][0]["integration"] = ["root", "subordinate"]
+        record["clauses"].append(self.subordinate_clause())
+        payload = authoritative_payload(record, "clause_ontology")
+        self.assertIs(payload.state, AuthoritativePayloadState.PRESENT)
+        self.assertFalse(payload.fully_resolved)
+        self.assertEqual(payload.resolved_count, 1)
+        self.assertEqual(payload.missing_count, 1)
+        decision = resolve_scoring_eligibility(record, "clause_ontology")
+        self.assertFalse(decision.scoreable)
+        self.assertIsNone(decision.coverage_state)
 
 
 if __name__ == "__main__":

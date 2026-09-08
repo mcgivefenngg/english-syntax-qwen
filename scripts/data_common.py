@@ -70,6 +70,11 @@ CLAUSE_INTEGRATIONS = {"root", "subordinate", "supplementary", "coordinate_membe
 CLAUSE_STATUSES = CLAUSE_INTEGRATIONS | {"supplement"}
 CLAUSE_FINITE_VALUES = {"finite", "nonfinite", "verbless", "unspecified"}
 CLAUSE_FORMS = {"to_infinitival", "bare_infinitival", "gerund_participial", "past_participial", "unspecified"}
+NOMINAL_SUBJECT_CATEGORIES = {"noun", "pronoun"}
+PREDICAND_KINDS = {
+    "overt_constituent", "implicit_control", "discourse_inferred", "generic", "indeterminate",
+}
+PREDICAND_TARGET_REQUIRED_KINDS = {"overt_constituent", "implicit_control"}
 ANNOTATION_COVERAGES = {"complete_constituency", "task_focused_partial"}
 ANNOTATED_DIMENSIONS = CANONICAL_DIMENSIONS
 NODE_KINDS = {"word", "phrase", "clause"}

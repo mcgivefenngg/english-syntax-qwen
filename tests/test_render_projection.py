@@ -300,6 +300,26 @@ class CoverageAwareProjectionTests(unittest.TestCase):
         self.assertNotIn("adjudication_notes", json.dumps(payload))
         self.assertNotIn("notes", payload.get("canonical_analysis", {}).get("typed_analysis", {}))
 
+    def test_invalid_constituent_does_not_leak_positive_phrase_gold(self) -> None:
+        record = record_with(
+            declaration("phrase_constituency", {"kind": "record"}, "partial"),
+            declaration("syntactic_function", {"kind": "record"}, "partial"),
+        )
+        record["constituents"][0]["head"] = "ghost"
+        by_id = {item["id"]: item for item in linguistic_projection(record)["constituents"]}
+        self.assertEqual(
+            by_id["subj"],
+            {"id": "subj", "node_kind": "phrase", "span": {"start": 0, "end": 2}, "function": "subject"},
+        )
+        self.assertEqual(by_id["obj"]["phrase_category"], "NP")
+
+    def test_invalid_clause_does_not_become_positive_clause_supervision(self) -> None:
+        record = record_with(declaration("clause_ontology", {"kind": "record"}, "partial"))
+        record["clauses"][0]["integration"] = ["root", "subordinate"]
+        projection = linguistic_projection(record)
+        self.assertNotIn("clauses", projection)
+        self.assertNotIn("subordinate", json.dumps(projection, ensure_ascii=False))
+
     def test_exact_end_to_end_scenario(self) -> None:
         record = record_with(
             declaration("clause_structure", {"kind": "record"}),

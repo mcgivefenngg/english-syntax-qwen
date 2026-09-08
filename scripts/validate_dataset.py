@@ -29,7 +29,8 @@ try:
         AMBIGUITY_STATUSES, ANNOTATED_DIMENSIONS, ANNOTATION_COVERAGES,
         CANONICAL_SCHEMA_VERSION, LEGACY_SCHEMA_VERSIONS,
         CAPABILITY_TAGS, CANONICAL_FRAMEWORK, CLAUSE_CONSTRUCTIONS, CLAUSE_FINITE_VALUES, CLAUSE_FORMS, CLAUSE_INTEGRATIONS, CLAUSE_STATUSES, CLAUSE_TYPES, DIFFICULTIES, FRAMEWORKS, LEXICAL_CATEGORIES,
-        PHRASE_CATEGORIES, SCHEMA_VERSIONS, SEMANTIC_ROLES, SENTENCE_CLASSIFICATION_LABELS, SENTENCE_TYPES,
+        NOMINAL_SUBJECT_CATEGORIES, PHRASE_CATEGORIES, PREDICAND_KINDS, PREDICAND_TARGET_REQUIRED_KINDS,
+        SCHEMA_VERSIONS, SEMANTIC_ROLES, SENTENCE_CLASSIFICATION_LABELS, SENTENCE_TYPES,
         SOURCE_TYPES, SPLITS, construction_signature, iter_jsonl_paths, normalized_text,
         normalized_surface_tokens, read_jsonl, sentence_from_record, sentence_word_alignment,
     )
@@ -38,7 +39,8 @@ except ImportError:
         AMBIGUITY_STATUSES, ANNOTATED_DIMENSIONS, ANNOTATION_COVERAGES,
         CANONICAL_SCHEMA_VERSION, LEGACY_SCHEMA_VERSIONS,
         CAPABILITY_TAGS, CANONICAL_FRAMEWORK, CLAUSE_CONSTRUCTIONS, CLAUSE_FINITE_VALUES, CLAUSE_FORMS, CLAUSE_INTEGRATIONS, CLAUSE_STATUSES, CLAUSE_TYPES, DIFFICULTIES, FRAMEWORKS, LEXICAL_CATEGORIES,
-        PHRASE_CATEGORIES, SCHEMA_VERSIONS, SEMANTIC_ROLES, SENTENCE_CLASSIFICATION_LABELS, SENTENCE_TYPES,
+        NOMINAL_SUBJECT_CATEGORIES, PHRASE_CATEGORIES, PREDICAND_KINDS, PREDICAND_TARGET_REQUIRED_KINDS,
+        SCHEMA_VERSIONS, SEMANTIC_ROLES, SENTENCE_CLASSIFICATION_LABELS, SENTENCE_TYPES,
         SOURCE_TYPES, SPLITS, construction_signature, iter_jsonl_paths, normalized_text,
         normalized_surface_tokens, read_jsonl, sentence_from_record, sentence_word_alignment,
     )
@@ -655,11 +657,11 @@ def _validate_predicand(value: Any, location: str, ids: set[str], objects: dict[
         elif value not in ids:
             _error(errors, location, "predicand must reference a known ID")
         return
-    if not isinstance(value, dict) or not _known(value.get("kind"), {"overt_constituent", "implicit_control", "discourse_inferred", "generic", "indeterminate"}):
+    if not isinstance(value, dict) or not _known(value.get("kind"), PREDICAND_KINDS):
         _error(errors, location, "predicand kind is invalid")
         return
     target = value.get("target")
-    if value["kind"] in {"overt_constituent", "implicit_control"}:
+    if value["kind"] in PREDICAND_TARGET_REQUIRED_KINDS:
         if not isinstance(target, str) or target not in ids:
             _error(errors, location, "overt_constituent and implicit_control predicands require a known target")
     elif target is not None and (not isinstance(target, str) or target not in ids):
@@ -1071,7 +1073,7 @@ def validate_record(record: Any, location: str, schema_path: Path | None = None)
                     subject_object = objects.get(subject_id) if isinstance(subject_id, str) else None
                     if subject_kind not in {"word", "phrase", "clause"}:
                         _error(errors, f"{item_location}.subject", "clause.subject must reference a word, phrase, or clause")
-                    elif subject_kind == "word" and subject_object.get("lexical_category") not in {"noun", "pronoun"}:
+                    elif subject_kind == "word" and subject_object.get("lexical_category") not in NOMINAL_SUBJECT_CATEGORIES:
                         _error(errors, f"{item_location}.subject", "clause.subject word reference must be nominal, not a marker/verb/punctuation")
                     elif subject_kind == "phrase" and subject_object.get("phrase_category") != "NP":
                         _error(errors, f"{item_location}.subject", "clause.subject phrase reference must be an NP")
