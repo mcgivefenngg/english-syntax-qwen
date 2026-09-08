@@ -5,7 +5,13 @@ import unittest
 from pathlib import Path
 from typing import Any
 
-from scripts.coverage_resolution import CoverageResolutionError, CoverageState, resolve_coverage
+from scripts.authoritative_payload import AuthoritativePayloadState, authoritative_payload_state
+from scripts.coverage_resolution import (
+    CoverageResolutionError,
+    CoverageState,
+    resolve_coverage,
+    resolve_scoring_eligibility,
+)
 from scripts.data_common import read_jsonl
 from scripts.migrate_v021 import migrate
 from scripts.render_sft import linguistic_projection
@@ -235,6 +241,127 @@ class EvidenceContentConsistencyTests(unittest.TestCase):
         migrate(record)
         entry = record["annotation_scope"]["dimensions"][0]
         self.assertEqual((entry.get("omission"), entry.get("evidence")), ("intentional", "unannotated"))
+
+
+CONFIRMED_EMPTY_DIMENSIONS = ("dependencies", "semantic_roles", "lexical_valency")
+
+
+def empty_declaration(dimension: str) -> dict[str, Any]:
+    return declaration(dimension, {"kind": "record"}, evidence="empty")
+
+
+def collection_record(dimension: str, values: Any = None, drop: bool = False) -> dict[str, Any]:
+    record = copy.deepcopy(FIXTURE)
+    if drop:
+        record.pop(dimension, None)
+    else:
+        record[dimension] = values
+    record["annotation_scope"]["dimensions"] = [
+        existing
+        for existing in record["annotation_scope"]["dimensions"]
+        if existing.get("dimension") != dimension
+    ] + [empty_declaration(dimension)]
+    return record
+
+
+class ConfirmedEmptyEvidenceTests(unittest.TestCase):
+    def test_explicit_empty_collection_is_confirmed_empty(self) -> None:
+        for dimension in CONFIRMED_EMPTY_DIMENSIONS:
+            with self.subTest(dimension=dimension):
+                record = collection_record(dimension, [])
+                self.assertEqual(validate_record(record, f"{dimension}-explicit-empty"), [])
+                self.assertIs(
+                    authoritative_payload_state(record, dimension),
+                    AuthoritativePayloadState.CONFIRMED_EMPTY,
+                )
+                self.assertIs(resolve_coverage(record, dimension), CoverageState.CONFIRMED_EMPTY)
+                decision = resolve_scoring_eligibility(record, dimension)
+                self.assertTrue(decision.scoreable)
+                self.assertIs(decision.coverage_state, CoverageState.CONFIRMED_EMPTY)
+                self.assertEqual(linguistic_projection(record)[dimension], [])
+
+    def test_missing_content_field_is_not_confirmed_empty(self) -> None:
+        for dimension in ("semantic_roles", "lexical_valency"):
+            with self.subTest(dimension=dimension):
+                record = collection_record(dimension, drop=True)
+                self.assertTrue(validate_record(record, f"{dimension}-missing-field"))
+                self.assertIsNot(
+                    authoritative_payload_state(record, dimension),
+                    AuthoritativePayloadState.CONFIRMED_EMPTY,
+                )
+                with self.assertRaises(CoverageResolutionError):
+                    resolve_coverage(record, dimension)
+                decision = resolve_scoring_eligibility(record, dimension)
+                self.assertFalse(decision.scoreable)
+                self.assertIsNone(decision.coverage_state)
+                self.assertNotIn(dimension, linguistic_projection(record))
+
+    def test_missing_schema_required_field_fails_closed(self) -> None:
+        record = collection_record("dependencies", drop=True)
+        self.assertTrue(validate_record(record, "dependencies-missing-required"))
+        self.assertIsNot(
+            authoritative_payload_state(record, "dependencies"),
+            AuthoritativePayloadState.CONFIRMED_EMPTY,
+        )
+        with self.assertRaises(CoverageResolutionError):
+            resolve_coverage(record, "dependencies")
+        self.assertFalse(resolve_scoring_eligibility(record, "dependencies").scoreable)
+        self.assertNotIn("dependencies", linguistic_projection(record))
+
+    def test_malformed_item_is_not_confirmed_empty(self) -> None:
+        for dimension in CONFIRMED_EMPTY_DIMENSIONS:
+            with self.subTest(dimension=dimension):
+                record = collection_record(dimension, [{}])
+                self.assertTrue(validate_record(record, f"{dimension}-malformed"))
+                self.assertIsNot(
+                    authoritative_payload_state(record, dimension),
+                    AuthoritativePayloadState.CONFIRMED_EMPTY,
+                )
+                with self.assertRaises(CoverageResolutionError):
+                    resolve_coverage(record, dimension)
+                self.assertFalse(resolve_scoring_eligibility(record, dimension).scoreable)
+                self.assertNotIn(dimension, linguistic_projection(record))
+
+    def test_schema_valid_malformed_dependency_is_not_confirmed_empty(self) -> None:
+        record = collection_record("dependencies", [{"relation": "nsubj", "head": "missing", "dependent": "also-missing"}])
+        self.assertTrue(validate_record(record, "dependencies-malformed-refs"))
+        self.assertIsNot(
+            authoritative_payload_state(record, "dependencies"),
+            AuthoritativePayloadState.CONFIRMED_EMPTY,
+        )
+        with self.assertRaises(CoverageResolutionError):
+            resolve_coverage(record, "dependencies")
+        self.assertFalse(resolve_scoring_eligibility(record, "dependencies").scoreable)
+        self.assertNotIn("dependencies", linguistic_projection(record))
+
+    def test_wrong_container_type_is_not_confirmed_empty(self) -> None:
+        for dimension, values in (("dependencies", None), ("semantic_roles", {}), ("lexical_valency", {})):
+            with self.subTest(dimension=dimension, values=type(values).__name__):
+                record = collection_record(dimension, values)
+                self.assertTrue(validate_record(record, f"{dimension}-wrong-container"))
+                self.assertIsNot(
+                    authoritative_payload_state(record, dimension),
+                    AuthoritativePayloadState.CONFIRMED_EMPTY,
+                )
+                with self.assertRaises(CoverageResolutionError):
+                    resolve_coverage(record, dimension)
+                self.assertFalse(resolve_scoring_eligibility(record, dimension).scoreable)
+                self.assertNotIn(dimension, linguistic_projection(record))
+
+    def test_present_non_empty_remains_valid(self) -> None:
+        record = record_with("dependencies", declaration("dependencies", {"kind": "record"}), [DEPENDENCY])
+        self.assertEqual(validate_record(record, "present-nonempty"), [])
+        self.assertIs(resolve_coverage(record, "dependencies"), CoverageState.COMPLETE)
+
+    def test_unannotated_empty_is_not_confirmed_empty(self) -> None:
+        entry = declaration("dependencies", {"kind": "record"}, "partial", "intentional", "unannotated")
+        record = record_with("dependencies", entry, [])
+        self.assertEqual(validate_record(record, "unannotated-empty"), [])
+        self.assertIs(resolve_coverage(record, "dependencies"), CoverageState.UNANNOTATED)
+        self.assertIsNot(
+            authoritative_payload_state(record, "dependencies"),
+            AuthoritativePayloadState.CONFIRMED_EMPTY,
+        )
 
 
 if __name__ == "__main__":

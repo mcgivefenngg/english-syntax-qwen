@@ -17,9 +17,21 @@ except ImportError:
     from scripts.collection_contract import collection_target_ids, validate_coverage_target
 
 try:
-    from authoritative_payload import AuthoritativePayload, AuthoritativePayloadState, authoritative_payload, authoritative_payload_state
+    from authoritative_payload import (
+        AuthoritativePayload,
+        AuthoritativePayloadState,
+        authoritative_payload,
+        authoritative_payload_state,
+        confirmed_empty_eligible,
+    )
 except ImportError:
-    from scripts.authoritative_payload import AuthoritativePayload, AuthoritativePayloadState, authoritative_payload, authoritative_payload_state
+    from scripts.authoritative_payload import (
+        AuthoritativePayload,
+        AuthoritativePayloadState,
+        authoritative_payload,
+        authoritative_payload_state,
+        confirmed_empty_eligible,
+    )
 
 try:
     from canonical_schema import canonical_schema_issues, canonical_schema_issue_text
@@ -254,6 +266,8 @@ def _collection_content_issues(
         elif evidence == "empty":
             if payload.has_authoritative_content:
                 issues.append(CoverageIssue(index, f"{scope_label} evidence='empty' cannot coexist with owned authoritative payload"))
+            elif not confirmed_empty_eligible(record, dimension_spec(dimension), payload):
+                issues.append(CoverageIssue(index, f"{scope_label} evidence='empty' requires an explicit empty content collection with no missing or malformed owned payload"))
         elif not payload.has_resolved_content:
             issues.append(CoverageIssue(index, f"{scope_label} annotated coverage requires evidence='empty' or resolved authoritative payload"))
     return issues

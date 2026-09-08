@@ -991,6 +991,36 @@ def _declared_confirmed_empty(record: dict[str, Any], dimension: str, target: st
         return False
 
 
+def confirmed_empty_eligible(
+    record: dict[str, Any],
+    spec: DimensionSpec | None,
+    payload: AuthoritativePayload,
+) -> bool:
+    """Whether a declared confirmed-empty is positively evidenced by the payload.
+
+    Confirmed-empty means the annotator explicitly inspected the dimension and
+    established that the applicable canonical collection contains zero items for
+    this scope. It is never satisfied by an absent field, a non-list container,
+    or owned payload the collector could not classify. The registry's
+    ``requires_payload_field``/``content_field`` contract is the single source of
+    truth for which dimensions carry an explicit empty representation. A
+    non-empty field is still eligible only when every item is owned by a more
+    specific scope, leaving zero resolved/unresolved/missing payload here; for
+    record-only collections that reduces to an explicit empty list.
+    """
+    if spec is None or not spec.requires_payload_field or spec.content_field is None:
+        return False
+    if spec.content_field not in record:
+        return False
+    if not isinstance(record[spec.content_field], list):
+        return False
+    return (
+        payload.resolved_count == 0
+        and payload.unresolved_count == 0
+        and payload.missing_count == 0
+    )
+
+
 def authoritative_payload(
     record: dict[str, Any],
     dimension: str,
@@ -1006,9 +1036,10 @@ def authoritative_payload(
     effective_target = None if target_validation.is_record_target else target_validation.normalized_target
     accumulator = _PayloadAccumulator()
     _collect_payload(record, spec, _scope(effective_target), accumulator)
-    if not accumulator.resolved_count and not accumulator.unresolved_count and _declared_confirmed_empty(record, dimension, effective_target if isinstance(effective_target, str) else None):
+    payload = accumulator.result(dimension, target)
+    if _declared_confirmed_empty(record, dimension, effective_target if isinstance(effective_target, str) else None) and confirmed_empty_eligible(record, spec, payload):
         return accumulator.result(dimension, target, AuthoritativePayloadState.CONFIRMED_EMPTY)
-    return accumulator.result(dimension, target)
+    return payload
 
 
 def authoritative_payload_state(
