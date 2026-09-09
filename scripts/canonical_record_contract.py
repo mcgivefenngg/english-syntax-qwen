@@ -39,6 +39,7 @@ class CanonicalConsistencyIssue:
     affected_dimensions: frozenset[str]
     affected_targets: frozenset[str]
     record_level: bool = False
+    affected_fields: frozenset[str] = frozenset()
 
 
 def _typed_reference_identifier(reference: Any) -> str | None:
@@ -272,6 +273,7 @@ def _sentence_type_contradiction_issues(record: dict[str, Any]) -> list[Canonica
             affected_dimensions=frozenset({"clause_structure", "clause_ontology"}),
             affected_targets=targets,
             record_level=True,
+            affected_fields=frozenset({"sentence_type"}),
         )]
     return []
 
@@ -310,3 +312,55 @@ def dimensions_affected_by_consistency_issues(record: dict[str, Any]) -> frozens
     for issue in canonical_record_consistency_issues(record):
         dimensions.update(issue.affected_dimensions)
     return frozenset(dimensions)
+
+
+def fields_in_consistency_conflict(record: dict[str, Any]) -> frozenset[str]:
+    """Return all scalar fields implicated by any consistency conflict."""
+    fields: set[str] = set()
+    for issue in canonical_record_consistency_issues(record):
+        fields.update(issue.affected_fields)
+    return frozenset(fields)
+
+
+def target_conflicted_for_dimension(
+    record: dict[str, Any],
+    dimension: str,
+    target: str,
+) -> bool:
+    """Whether a specific target is in consistency conflict for a given dimension."""
+    for issue in canonical_record_consistency_issues(record):
+        if dimension in issue.affected_dimensions and target in issue.affected_targets:
+            return True
+    return False
+
+
+def record_level_consistency_failures(
+    record: dict[str, Any],
+    dimension: str,
+) -> tuple[CanonicalConsistencyIssue, ...]:
+    """Return record-level consistency issues affecting a dimension.
+
+    These are issues with record_level=True that cannot be fully represented
+    by affected target IDs alone (e.g. zero-root cardinality).
+    """
+    return tuple(
+        issue
+        for issue in canonical_record_consistency_issues(record)
+        if issue.record_level and dimension in issue.affected_dimensions
+    )
+
+
+def canonical_target_consistency_status(
+    record: dict[str, Any],
+    dimension: str,
+    target: str,
+) -> str:
+    """Return consistency-derived status for a target in a dimension.
+
+    Returns 'conflicted' if the target participates in a consistency conflict
+    for the given dimension, 'clean' otherwise. Consumers should combine this
+    with local structural status to determine final payload status.
+    """
+    if target_conflicted_for_dimension(record, dimension, target):
+        return "conflicted"
+    return "clean"

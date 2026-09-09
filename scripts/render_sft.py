@@ -60,12 +60,14 @@ try:
         canonical_record_consistency_issues,
         targets_in_consistency_conflict,
         dimensions_affected_by_consistency_issues,
+        fields_in_consistency_conflict,
     )
 except ImportError:
     from scripts.canonical_record_contract import (
         canonical_record_consistency_issues,
         targets_in_consistency_conflict,
         dimensions_affected_by_consistency_issues,
+        fields_in_consistency_conflict,
     )
 
 
@@ -1139,8 +1141,11 @@ def linguistic_projection(record: dict[str, Any], *, include_governance: bool = 
         if value is not None:
             projection[field] = value
     scalar_dimensions = PROJECTION_FIELD_DIMENSIONS
+    conflicted_fields = fields_in_consistency_conflict(record)
     for field, dimensions in scalar_dimensions.items():
         if field not in record:
+            continue
+        if field in conflicted_fields:
             continue
         value = record[field]
         if field in {"pedagogical_aliases", "fusion_relations", "ambiguity", "rejected_analyses", "error_diagnosis"}:

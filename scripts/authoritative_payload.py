@@ -963,6 +963,10 @@ def _collect_clauses(record: dict[str, Any], spec: DimensionSpec, scope: dict[st
         if local_status == "resolved" and identifier in conflict_targets and spec.name in affected_dimensions:
             local_status = "missing"
         accumulator.add(identifier, "clauses", local_status)
+    if scope.get("kind") == "record":
+        for issue in canonical_record_consistency_issues(record):
+            if issue.record_level and spec.name in issue.affected_dimensions and not issue.affected_targets:
+                accumulator.add(f"record_consistency:{issue.code}", "clauses", "missing")
 
 
 def _collect_functions(record: dict[str, Any], spec: DimensionSpec, scope: dict[str, Any], accumulator: _PayloadAccumulator) -> None:
@@ -1010,6 +1014,8 @@ def _collect_complementation(record: dict[str, Any], spec: DimensionSpec, scope:
     if _has_field(spec, "constituents"):
         constituents = record.get("constituents")
         if isinstance(constituents, list):
+            conflict_targets = targets_in_consistency_conflict(record)
+            affected_dimensions = dimensions_affected_by_consistency_issues(record)
             for item in constituents:
                 if not isinstance(item, dict) or not _in_scope(record, item, scope) or item.get("function") not in _COMPLEMENTATION_FUNCTIONS:
                     continue
@@ -1017,7 +1023,14 @@ def _collect_complementation(record: dict[str, Any], spec: DimensionSpec, scope:
                 if not _payload_owned_in_scope(record, spec.name, targets, scope):
                     continue
                 identifier = item.get("id") if isinstance(item.get("id"), str) else "constituent"
-                accumulator.add(identifier, "constituents", "resolved")
+                structural_status = _constituent_status(record, item)
+                if structural_status != "resolved":
+                    status = structural_status
+                elif identifier in conflict_targets and spec.name in affected_dimensions:
+                    status = "missing"
+                else:
+                    status = "resolved"
+                accumulator.add(identifier, "constituents", status)
     if _has_field(spec, "lexical_valency"):
         values = record.get("lexical_valency")
         if isinstance(values, list):
