@@ -64,6 +64,11 @@ try:
 except ImportError:
     from scripts.collection_contract import normalize_predicate_reference, predicate_reference_issue
 
+try:
+    from canonical_record_contract import canonical_record_consistency_issues
+except ImportError:
+    from scripts.canonical_record_contract import canonical_record_consistency_issues
+
 ANALYSIS_LEVELS = {"lexical_category", "phrase_category", "syntactic_function", "clause_structure", "framework", "semantic_role", "span", "none"}
 FRAMEWORK_SENSITIVE_ANALYSIS_TYPES = {"ecm", "small_clause", "ud_pos", "ptb_pos", "gerund_as_noun", "control", "raising", "perception", "perception_construction"}
 REVIEW_STATUSES = {"schema_migrated", "structurally_validated", "review_required", "linguistically_reviewed", "approved_for_training", "canonical_gold"}
@@ -1080,143 +1085,9 @@ def validate_record(record: Any, location: str, schema_path: Path | None = None)
                 _validate_predicand(item.get("predicand"), f"{item_location}.predicand", all_ids, objects, version, errors)
 
     if _is_v4(record) and isinstance(record.get("constituents"), list):
-        realization_groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
-        for constituent in record["constituents"]:
-            if not isinstance(constituent, dict) or constituent.get("node_kind") != "clause":
-                continue
-            clause_ref = constituent.get("clause_ref")
-            span = constituent.get("span")
-            if isinstance(clause_ref, str) and isinstance(span, dict) and isinstance(span.get("start"), int) and isinstance(span.get("end"), int):
-                realization = constituent.get("realization") if isinstance(constituent.get("realization"), dict) else {}
-                context = realization.get("context") if isinstance(realization.get("context"), str) else ""
-                layer = realization.get("layer") if isinstance(realization.get("layer"), str) else ""
-                realization_groups.setdefault((clause_ref, context, layer), []).append(constituent)
-
-        def wrapper_authority(wrappers: list[dict[str, Any]]) -> bool:
-            relevant_wrapper_ids = {
-                wrapper.get("id") for wrapper in wrappers
-                if isinstance(wrapper.get("id"), str)
-            }
-            relevant_clause_refs = {
-                wrapper.get("clause_ref") for wrapper in wrappers
-                if isinstance(wrapper.get("clause_ref"), str)
-            }
-            alternative_values = record.get("alternative_analyses", [])
-            if not isinstance(alternative_values, list):
-                alternative_values = []
-            alternatives_by_id = {
-                item.get("id"): item for item in alternative_values
-                if isinstance(item, dict) and isinstance(item.get("id"), str)
-            }
-            relation_nodes: dict[str, set[str]] = {}
-            analyses_for_relations = []
-            for field in ("canonical_analysis", "preferred_analysis"):
-                if isinstance(record.get(field), dict):
-                    analyses_for_relations.append(record[field])
-            analyses_for_relations.extend(value for value in alternatives_by_id.values())
-            for analysis in analyses_for_relations:
-                typed = analysis.get("typed_analysis") if isinstance(analysis, dict) else None
-                for relation in typed.get("relations", []) if isinstance(typed, dict) and isinstance(typed.get("relations"), list) else []:
-                    if not isinstance(relation, dict) or not isinstance(relation.get("id"), str):
-                        continue
-                    nodes = {
-                        identifier for identifier in (
-                            _typed_reference_identifier(relation.get("source")),
-                            _typed_reference_identifier(relation.get("target")),
-                        ) if isinstance(identifier, str)
-                    }
-                    relation_nodes[relation["id"]] = nodes
-
-            established_nodes: set[str] = set()
-            established_relation_nodes: set[str] = set()
-
-            def string_ids(values: Any) -> set[str]:
-                if not isinstance(values, list):
-                    return set()
-                return {value for value in values if isinstance(value, str)}
-
-            def linked_relation_nodes(relation_ids: Any) -> set[str]:
-                nodes: set[str] = set()
-                for relation_id in string_ids(relation_ids):
-                    nodes.update(relation_nodes.get(relation_id, set()))
-                return nodes
-
-            for alternative in alternatives_by_id.values():
-                if alternative.get("status") != "established":
-                    continue
-                linked_relation_ids = string_ids(alternative.get("linked_relation_ids"))
-                established_nodes.update(_linked_ids(alternative, ALTERNATIVE_LINK_FIELDS) - linked_relation_ids)
-                established_relation_nodes.update(linked_relation_nodes(alternative.get("linked_relation_ids")))
-            ambiguity = record.get("ambiguity")
-            relevant_ambiguity_analyses = 0
-            ambiguity_nodes: set[str] = set()
-            ambiguity_relation_nodes: set[str] = set()
-            if (
-                isinstance(ambiguity, dict)
-                and ambiguity.get("status") in {"genuinely_ambiguous", "multiple_established_analyses_with_preferred_reading"}
-                and isinstance(ambiguity.get("analyses"), list)
-            ):
-                for analysis in ambiguity["analyses"]:
-                    if not isinstance(analysis, dict):
-                        continue
-                    relation_ids = string_ids(analysis.get("relation_ids"))
-                    alternative_ids = analysis.get("alternative_ids")
-                    alternative_id_values = string_ids(alternative_ids)
-                    analysis_nodes = _linked_ids(analysis, AMBIGUITY_LINK_FIELDS) - relation_ids - alternative_id_values
-                    analysis_relation_nodes: set[str] = set()
-                    for relation_id in relation_ids:
-                        if isinstance(relation_id, str):
-                            analysis_relation_nodes.update(relation_nodes.get(relation_id, set()))
-                    if isinstance(alternative_ids, list):
-                        for alternative_id in alternative_ids:
-                            alternative = alternatives_by_id.get(alternative_id)
-                            if not isinstance(alternative, dict) or alternative.get("status") != "established":
-                                continue
-                            linked_relation_ids = string_ids(alternative.get("linked_relation_ids"))
-                            analysis_nodes.update(_linked_ids(alternative, ALTERNATIVE_LINK_FIELDS) - linked_relation_ids)
-                            for relation_id in linked_relation_ids:
-                                if isinstance(relation_id, str):
-                                    analysis_relation_nodes.update(relation_nodes.get(relation_id, set()))
-                    if (
-                        bool(relevant_clause_refs & analysis_nodes)
-                        or bool(relevant_wrapper_ids & analysis_nodes)
-                        or bool(relevant_clause_refs & analysis_relation_nodes)
-                        or bool(relevant_wrapper_ids & analysis_relation_nodes)
-                    ):
-                        relevant_ambiguity_analyses += 1
-                    ambiguity_nodes.update(analysis_nodes)
-                    ambiguity_relation_nodes.update(analysis_relation_nodes)
-            ambiguity_authorizes = relevant_ambiguity_analyses >= 2 and (
-                bool(relevant_clause_refs & ambiguity_nodes)
-                or relevant_wrapper_ids.issubset(ambiguity_nodes)
-                or bool(relevant_clause_refs & ambiguity_relation_nodes)
-                or relevant_wrapper_ids.issubset(ambiguity_relation_nodes)
-            )
-            established_alternative_authorizes = (
-                bool(relevant_clause_refs & established_nodes)
-                or relevant_wrapper_ids.issubset(established_nodes)
-                or bool(relevant_clause_refs & established_relation_nodes)
-                or relevant_wrapper_ids.issubset(established_relation_nodes)
-            )
-            return (
-                established_alternative_authorizes
-                or ambiguity_authorizes
-            )
-
-        for key, wrappers in realization_groups.items():
-            if len(wrappers) <= 1 or wrapper_authority(wrappers):
-                continue
-            spans = {
-                (wrapper.get("span", {}).get("start"), wrapper.get("span", {}).get("end"))
-                for wrapper in wrappers if isinstance(wrapper.get("span"), dict)
-            }
-            functions = {wrapper.get("function") for wrapper in wrappers}
-            if len(spans) > 1:
-                _error(errors, location, f"clause realization {key!r} has incompatible unlinked multi-span wrappers")
-            elif len(functions) > 1:
-                _error(errors, location, f"clause realization {key!r} has conflicting canonical wrapper functions; link an explicit ambiguity or established alternative")
-            else:
-                _error(errors, location, f"clause realization {key!r} has duplicate canonical wrappers")
+        for issue in canonical_record_consistency_issues(record):
+            if issue.code == "duplicate_clause_wrapper":
+                _error(errors, location, issue.message)
         wrapped_clause_ids = {
             item.get("clause_ref") for item in record["constituents"]
             if isinstance(item, dict) and item.get("node_kind") == "clause" and isinstance(item.get("clause_ref"), str)
@@ -1253,13 +1124,9 @@ def validate_record(record: Any, location: str, schema_path: Path | None = None)
                 _error(errors, location, f"complete syntactic-function coverage requires an external realization wrapper for clause {clause.get('id')!r}")
 
     if _is_v3(record) and isinstance(record.get("clauses"), list):
-        root_clauses = [item for item in record["clauses"] if isinstance(item, dict) and isinstance(item.get("integration"), list) and "root" in item.get("integration", [])]
-        if len(root_clauses) != 1:
-            _error(errors, location, "V0.4 records must contain exactly one root clause")
-        elif _is_v4(record):
-            root_construction = root_clauses[0].get("clause_construction")
-            if root_construction in {"declarative", "interrogative", "exclamative"} and record.get("sentence_type") != root_construction:
-                _error(errors, location, "sentence_type is derived from the root clause and cannot contradict its construction")
+        for issue in canonical_record_consistency_issues(record):
+            if issue.code in {"multiple_root_clauses", "sentence_type_root_construction_contradiction"}:
+                _error(errors, location, issue.message)
 
     dependencies = record["dependencies"] if isinstance(record["dependencies"], list) else []
     if not isinstance(record["dependencies"], list):

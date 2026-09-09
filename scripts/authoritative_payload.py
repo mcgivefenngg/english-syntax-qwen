@@ -71,6 +71,19 @@ except ImportError:
         parse_typed_reference,
     )
 
+try:
+    from canonical_record_contract import (
+        canonical_record_consistency_issues,
+        targets_in_consistency_conflict,
+        dimensions_affected_by_consistency_issues,
+    )
+except ImportError:
+    from scripts.canonical_record_contract import (
+        canonical_record_consistency_issues,
+        targets_in_consistency_conflict,
+        dimensions_affected_by_consistency_issues,
+    )
+
 
 class AuthoritativePayloadState(str, Enum):
     PRESENT = "present"
@@ -897,6 +910,8 @@ def _collect_constituents(record: dict[str, Any], spec: DimensionSpec, scope: di
         item for item in constituents
         if isinstance(item, dict) and item.get("node_kind") == "phrase" and item.get("phrase_category") == "NP"
     ]
+    conflict_targets = targets_in_consistency_conflict(record)
+    affected_dimensions = dimensions_affected_by_consistency_issues(record)
     for item in constituents:
         if not isinstance(item, dict):
             continue
@@ -923,7 +938,10 @@ def _collect_constituents(record: dict[str, Any], spec: DimensionSpec, scope: di
         if not _payload_owned_in_scope(record, spec.name, targets, scope):
             continue
         identifier = item.get("id") if isinstance(item.get("id"), str) else "constituent"
-        accumulator.add(identifier, "constituents", _constituent_status(record, item))
+        local_status = _constituent_status(record, item)
+        if local_status == "resolved" and identifier in conflict_targets and spec.name in affected_dimensions:
+            local_status = "missing"
+        accumulator.add(identifier, "constituents", local_status)
 
 
 def _collect_clauses(record: dict[str, Any], spec: DimensionSpec, scope: dict[str, Any], accumulator: _PayloadAccumulator) -> None:
@@ -932,6 +950,8 @@ def _collect_clauses(record: dict[str, Any], spec: DimensionSpec, scope: dict[st
     clauses = record.get("clauses")
     if not isinstance(clauses, list):
         return
+    conflict_targets = targets_in_consistency_conflict(record)
+    affected_dimensions = dimensions_affected_by_consistency_issues(record)
     for item in clauses:
         if not isinstance(item, dict) or not _in_scope(record, item, scope):
             continue
@@ -939,12 +959,17 @@ def _collect_clauses(record: dict[str, Any], spec: DimensionSpec, scope: dict[st
         if not _payload_owned_in_scope(record, spec.name, targets, scope):
             continue
         identifier = item.get("id") if isinstance(item.get("id"), str) else "clause"
-        accumulator.add(identifier, "clauses", _clause_status(record, item))
+        local_status = _clause_status(record, item)
+        if local_status == "resolved" and identifier in conflict_targets and spec.name in affected_dimensions:
+            local_status = "missing"
+        accumulator.add(identifier, "clauses", local_status)
 
 
 def _collect_functions(record: dict[str, Any], spec: DimensionSpec, scope: dict[str, Any], accumulator: _PayloadAccumulator) -> None:
     if _has_field(spec, "constituents"):
         constituents = record.get("constituents")
+        conflict_targets = targets_in_consistency_conflict(record)
+        affected_dimensions = dimensions_affected_by_consistency_issues(record)
         if isinstance(constituents, list):
             for item in constituents:
                 if not isinstance(item, dict) or not _in_scope(record, item, scope):
@@ -958,6 +983,8 @@ def _collect_functions(record: dict[str, Any], spec: DimensionSpec, scope: dict[
                     status = structural_status
                 else:
                     status = "resolved" if isinstance(item.get("function"), str) and item["function"] else "missing"
+                if status == "resolved" and identifier in conflict_targets and spec.name in affected_dimensions:
+                    status = "missing"
                 accumulator.add(identifier, "constituents", status)
     if _has_field(spec, "words"):
         words = record.get("words")

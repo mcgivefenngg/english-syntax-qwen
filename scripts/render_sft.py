@@ -55,6 +55,19 @@ except ImportError:
         typed_reference_identifier,
     )
 
+try:
+    from canonical_record_contract import (
+        canonical_record_consistency_issues,
+        targets_in_consistency_conflict,
+        dimensions_affected_by_consistency_issues,
+    )
+except ImportError:
+    from scripts.canonical_record_contract import (
+        canonical_record_consistency_issues,
+        targets_in_consistency_conflict,
+        dimensions_affected_by_consistency_issues,
+    )
+
 
 DEFAULT_SYSTEM = "You are English Syntax Tutor. Distinguish lexical category, phrase category, syntactic function, semantic role, and framework-specific terminology."
 
@@ -402,6 +415,8 @@ def _project_clauses(record: dict[str, Any], rendering_mode: str) -> list[dict[s
     values = record.get("clauses")
     if not isinstance(values, list):
         return None
+    conflict_targets = targets_in_consistency_conflict(record)
+    affected_dimensions = dimensions_affected_by_consistency_issues(record)
     result: list[dict[str, Any]] = []
     for source in values:
         if not isinstance(source, dict) or not isinstance(source.get("id"), str):
@@ -409,6 +424,10 @@ def _project_clauses(record: dict[str, Any], rendering_mode: str) -> list[dict[s
         identifier = source["id"]
         covered = _property_covered(record, "clauses", "finiteness", identifier)
         if not covered:
+            continue
+        clause_structure_conflicted = identifier in conflict_targets and "clause_structure" in affected_dimensions
+        clause_ontology_conflicted = identifier in conflict_targets and "clause_ontology" in affected_dimensions
+        if clause_structure_conflicted and clause_ontology_conflicted:
             continue
         item = {"id": identifier, "node_kind": "clause"}
         for key in ("span", "finiteness", "clause_form", "clause_construction", "integration", "subject", "predicand", "head", "marker_ids", "integration_parent"):
@@ -422,6 +441,8 @@ def _project_constituents(record: dict[str, Any], rendering_mode: str) -> list[d
     values = record.get("constituents")
     if not isinstance(values, list):
         return None
+    conflict_targets = targets_in_consistency_conflict(record)
+    affected_dimensions = dimensions_affected_by_consistency_issues(record)
     result: list[dict[str, Any]] = []
     for source in values:
         if not isinstance(source, dict) or not isinstance(source.get("id"), str):
@@ -440,6 +461,13 @@ def _project_constituents(record: dict[str, Any], rendering_mode: str) -> list[d
         if structural_status != "resolved":
             phrase_covered = False
             internal_covered = False
+            function_covered = False
+        phrase_constituency_conflicted = identifier in conflict_targets and "phrase_constituency" in affected_dimensions
+        syntactic_function_conflicted = identifier in conflict_targets and "syntactic_function" in affected_dimensions
+        if phrase_constituency_conflicted:
+            phrase_covered = False
+            internal_covered = False
+        if syntactic_function_conflicted:
             function_covered = False
         if not any((phrase_covered, internal_covered, function_covered)):
             continue
@@ -942,6 +970,8 @@ def _add_reference_shells(record: dict[str, Any], projection: dict[str, Any]) ->
                 continue
             raw_by_namespace[(namespace, item["id"])] = item
             raw_unqualified[item["id"]] = (namespace, item)
+    conflict_targets = targets_in_consistency_conflict(record)
+    affected_dimensions = dimensions_affected_by_consistency_issues(record)
 
     def present_references() -> set[tuple[str, str]]:
         return {
@@ -963,15 +993,17 @@ def _add_reference_shells(record: dict[str, Any], projection: dict[str, Any]) ->
             collection = collection_names[source_namespace]
             if (source_namespace, identifier) in present:
                 continue
+            is_conflicted = identifier in conflict_targets
             if source_namespace == "word":
                 shell = {"id": identifier, "node_kind": "word"}
             elif source_namespace == "clause":
                 shell = {"id": identifier, "node_kind": "clause"}
-                if "span" in source:
+                if not is_conflicted and "span" in source:
                     shell["span"] = copy.deepcopy(source["span"])
             else:
                 shell = {"id": identifier, "node_kind": source.get("node_kind", "phrase")}
-                if _constituent_status(record, source) == "resolved":
+                constituent_conflicted = is_conflicted and ("phrase_constituency" in affected_dimensions or "syntactic_function" in affected_dimensions)
+                if not constituent_conflicted and _constituent_status(record, source) == "resolved":
                     if "span" in source:
                         shell["span"] = copy.deepcopy(source["span"])
                     if isinstance(source.get("clause_ref"), str):
