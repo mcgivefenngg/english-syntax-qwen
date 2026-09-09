@@ -2594,5 +2594,133 @@ class H2B01TypedRecordScopeTruthfulnessTests(unittest.TestCase):
         self.assertEqual(region_payload.applicable_count, 0)
 
 
+class H2R1aMalformedTypedRelationRecordScopeTests(unittest.TestCase):
+    """H2-R1a: Malformed typed relations must not disappear from record scope."""
+
+    def _vp_record(self, relations, extra_declarations=None):
+        record = copy.deepcopy(FIXTURE)
+        declarations = [
+            declaration("vp_complementation", {"kind": "record"}),
+            declaration("vp_complementation", {"kind": "node", "node": "subj"}),
+        ]
+        if extra_declarations:
+            declarations.extend(extra_declarations)
+        record["annotation_scope"]["dimensions"] = declarations
+        ta = record["canonical_analysis"]["typed_analysis"]
+        ta["status"] = "established"
+        ta["relations"] = relations
+        return record
+
+    def test_mixed_valid_dangling_endpoint_included_in_record(self) -> None:
+        record = self._vp_record([{
+            "id": "r1", "type": "selection", "arity": "binary",
+            "source": "constituent:subj", "target": "constituent:ghost",
+            "status": "established",
+        }])
+        record_payload = authoritative_payload(record, "vp_complementation")
+        node_payload = authoritative_payload(record, "vp_complementation", "subj")
+        self.assertEqual(record_payload.applicable_count, 1)
+        self.assertEqual(record_payload.missing_count, 1)
+        self.assertEqual(record_payload.resolved_count, 0)
+        self.assertEqual(node_payload.applicable_count, 1)
+        self.assertEqual(node_payload.missing_count, 1)
+
+    def test_reversed_dangling_endpoint_included_in_record(self) -> None:
+        record = self._vp_record([{
+            "id": "r1", "type": "selection", "arity": "binary",
+            "source": "constituent:ghost", "target": "constituent:subj",
+            "status": "established",
+        }])
+        record_payload = authoritative_payload(record, "vp_complementation")
+        self.assertEqual(record_payload.applicable_count, 1)
+        self.assertEqual(record_payload.missing_count, 1)
+        self.assertEqual(record_payload.resolved_count, 0)
+
+    def test_wrong_namespace_kind_not_accepted_as_canonical_target(self) -> None:
+        record = self._vp_record([{
+            "id": "r1", "type": "selection", "arity": "binary",
+            "source": "word:subj", "target": "word:subj",
+            "status": "established",
+        }])
+        record_payload = authoritative_payload(record, "vp_complementation")
+        node_payload = authoritative_payload(record, "vp_complementation", "subj")
+        self.assertEqual(record_payload.applicable_count, 1)
+        self.assertEqual(record_payload.missing_count, 1)
+        self.assertEqual(node_payload.applicable_count, 0)
+
+    def test_valid_more_specific_relation_excluded_from_record(self) -> None:
+        record = self._vp_record([{
+            "id": "r1", "type": "selection", "arity": "binary",
+            "source": "constituent:subj", "target": "constituent:subj",
+            "status": "established",
+        }])
+        record_payload = authoritative_payload(record, "vp_complementation")
+        node_payload = authoritative_payload(record, "vp_complementation", "subj")
+        self.assertEqual(record_payload.applicable_count, 0)
+        self.assertEqual(node_payload.applicable_count, 1)
+        self.assertEqual(node_payload.resolved_count, 1)
+
+    def test_analysis_local_relation_record_fallback(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["annotation_scope"]["dimensions"] = [
+            declaration("vp_complementation", {"kind": "node", "node": "subj"}),
+        ]
+        ta = record["canonical_analysis"]["typed_analysis"]
+        ta["status"] = "established"
+        ta["entities"] = [{"id": "e1", "kind": "clause"}, {"id": "e2", "kind": "clause"}]
+        ta["relations"] = [{
+            "id": "r1", "type": "selection", "arity": "binary",
+            "source": "analysis:e1", "target": "analysis:e2",
+            "status": "established",
+        }]
+        node_payload = authoritative_payload(record, "vp_complementation", "subj")
+        self.assertEqual(node_payload.applicable_count, 0)
+
+    def test_malformed_typed_relation_prevents_confirmed_empty(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["annotation_scope"]["dimensions"] = [
+            declaration("vp_complementation", {"kind": "record"}, evidence="empty"),
+            declaration("vp_complementation", {"kind": "node", "node": "subj"}),
+        ]
+        ta = record["canonical_analysis"]["typed_analysis"]
+        ta["status"] = "established"
+        ta["relations"] = [{
+            "id": "r1", "type": "selection", "arity": "binary",
+            "source": "constituent:subj", "target": "constituent:ghost",
+            "status": "established",
+        }]
+        payload = authoritative_payload(record, "vp_complementation")
+        self.assertIsNot(payload.state, AuthoritativePayloadState.CONFIRMED_EMPTY)
+        self.assertGreater(payload.missing_count, 0)
+
+    def test_complete_truthfulness_with_valid_and_malformed_relations(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["annotation_scope"]["dimensions"] = [
+            declaration("vp_complementation", {"kind": "record"}),
+            declaration("vp_complementation", {"kind": "node", "node": "subj"}),
+        ]
+        ta = record["canonical_analysis"]["typed_analysis"]
+        ta["status"] = "established"
+        ta["relations"] = [
+            {
+                "id": "r_valid", "type": "selection", "arity": "binary",
+                "source": "constituent:obj", "target": "constituent:obj",
+                "status": "established",
+            },
+            {
+                "id": "r_malformed", "type": "selection", "arity": "binary",
+                "source": "constituent:subj", "target": "constituent:ghost",
+                "status": "established",
+            },
+        ]
+        record_payload = authoritative_payload(record, "vp_complementation")
+        self.assertIs(record_payload.state, AuthoritativePayloadState.PRESENT)
+        self.assertGreater(record_payload.resolved_count, 0)
+        self.assertGreater(record_payload.missing_count, 0)
+        self.assertFalse(record_payload.fully_resolved)
+        decision = resolve_scoring_eligibility(record, "vp_complementation")
+        self.assertFalse(decision.scoreable)
+
+
 if __name__ == "__main__":
     unittest.main()

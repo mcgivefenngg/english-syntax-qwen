@@ -712,6 +712,25 @@ def _typed_relation_status(
 
 _CANONICAL_TYPED_REFERENCE_NAMESPACES = frozenset({"word", "constituent", "clause"})
 
+_NAMESPACE_COLLECTION_MAP: dict[str, str] = {
+    "word": "words",
+    "constituent": "constituents",
+    "clause": "clauses",
+}
+
+
+def _namespace_collection_has_id(record: dict[str, Any], namespace: str, identifier: str) -> bool:
+    collection_name = _NAMESPACE_COLLECTION_MAP.get(namespace)
+    if collection_name is None:
+        return False
+    collection = record.get(collection_name)
+    if not isinstance(collection, list):
+        return False
+    return any(
+        isinstance(item, dict) and item.get("id") == identifier
+        for item in collection
+    )
+
 
 def _typed_relation_canonical_targets(
     record: dict[str, Any],
@@ -720,19 +739,48 @@ def _typed_relation_canonical_targets(
     """Return canonical object IDs referenced by a typed relation's endpoints.
 
     Only word/constituent/clause namespace references that resolve to actual
-    canonical objects are routing targets. Analysis-local and dangling
-    references are not canonical routing targets.
+    canonical objects in the namespace-specific collection are routing targets.
+    Analysis-local and dangling references are not canonical routing targets.
+    Namespace kind must match: word references only resolve against words,
+    constituent references against constituents, clause references against clauses.
     """
-    objects = _record_objects(record)
     targets: list[str] = []
     for reference_field in ("source", "target"):
         parsed = parse_typed_reference(relation.get(reference_field))
         if parsed is None:
             continue
         namespace, identifier = parsed
-        if namespace in _CANONICAL_TYPED_REFERENCE_NAMESPACES and identifier in objects:
+        if namespace in _CANONICAL_TYPED_REFERENCE_NAMESPACES and _namespace_collection_has_id(record, namespace, identifier):
             targets.append(identifier)
     return targets
+
+
+def _typed_relation_all_endpoints_routable(
+    record: dict[str, Any],
+    relation: dict[str, Any],
+) -> bool:
+    """Check whether every present endpoint of a typed relation is routable.
+
+    Returns False if any endpoint is unparseable, uses an unknown namespace,
+    or references a missing identifier in the namespace-specific collection.
+    Analysis-local references are not canonical routing targets but are
+    considered routable for scope-exclusion purposes.
+    """
+    for reference_field in ("source", "target"):
+        reference = relation.get(reference_field)
+        if reference is None:
+            continue
+        parsed = parse_typed_reference(reference)
+        if parsed is None:
+            return False
+        namespace, identifier = parsed
+        if namespace == "analysis":
+            continue
+        if namespace not in _CANONICAL_TYPED_REFERENCE_NAMESPACES:
+            return False
+        if not _namespace_collection_has_id(record, namespace, identifier):
+            return False
+    return True
 
 
 def _typed_relation_owned_in_scope(
@@ -744,14 +792,22 @@ def _typed_relation_owned_in_scope(
     """Typed-relation-specific scope routing.
 
     Canonical routing targets (word/constituent/clause references resolving to
-    actual objects) determine node/region ownership. When no canonical routing
-    target exists, record scope is the fallback authority location.
+    actual objects in the namespace-specific collection) determine node/region
+    ownership. When no canonical routing target exists, record scope is the
+    fallback authority location.
+
+    A relation with any malformed/unroutable endpoint must not be excluded from
+    record scope by more-specific ownership. Only structurally routable relations
+    may be excluded from record scope when all canonical targets have a
+    more-specific scope owner.
     """
     canonical_targets = _typed_relation_canonical_targets(record, relation)
     kind = scope.get("kind")
 
     if kind == "record":
         if not canonical_targets:
+            return True
+        if not _typed_relation_all_endpoints_routable(record, relation):
             return True
         for target in canonical_targets:
             if not _more_specific_scope(record, dimension, target, scope):
