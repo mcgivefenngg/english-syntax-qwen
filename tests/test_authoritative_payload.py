@@ -11,6 +11,7 @@ from scripts.authoritative_payload import (
     authoritative_payload,
     authoritative_payload_items,
     authoritative_payload_state,
+    confirmed_empty_eligible,
     construction_typed_relation_types,
     typed_analysis_relation_entries,
     typed_argument_owner_dimensions,
@@ -18,7 +19,8 @@ from scripts.authoritative_payload import (
 )
 from scripts.canonical_schema import canonical_schema_issues
 from scripts.data_common import read_jsonl
-from scripts.coverage_resolution import CoverageState, resolve_scoring_eligibility
+from scripts.coverage_resolution import CoverageState, resolve_coverage, resolve_scoring_eligibility
+from scripts.dimension_registry import dimension_spec
 from scripts.render_sft import linguistic_projection
 from scripts.validate_dataset import validate_record
 
@@ -2311,6 +2313,285 @@ class A1c1SiblingIsolationTests(unittest.TestCase):
         self.assertNotIn("r2", relation_ids)
         decision = resolve_scoring_eligibility(record, "construction_relations")
         self.assertFalse(decision.scoreable)
+
+
+class H2B01TypedRecordScopeTruthfulnessTests(unittest.TestCase):
+    """H2-B01: Typed record payload must not be filtered by endpoint existence."""
+
+    def _dep_record_with_typed(self, relations, evidence="empty"):
+        record = copy.deepcopy(FIXTURE)
+        record["dependencies"] = []
+        record["annotation_scope"]["dimensions"] = [
+            declaration("dependencies", {"kind": "record"}, evidence=evidence),
+        ]
+        ta = record["canonical_analysis"]["typed_analysis"]
+        ta["status"] = "established"
+        ta["entities"] = [
+            {"id": "e1", "kind": "clause"},
+            {"id": "e2", "kind": "clause"},
+        ]
+        ta["relations"] = relations
+        return record
+
+    def test_dangling_typed_dependency_contributes_missing(self) -> None:
+        record = self._dep_record_with_typed([{
+            "id": "r1", "type": "dependency", "arity": "binary",
+            "source": "word:ghost", "target": "analysis:e1",
+            "status": "established",
+        }])
+        payload = authoritative_payload(record, "dependencies")
+        self.assertEqual(payload.applicable_count, 1)
+        self.assertEqual(payload.missing_count, 1)
+        self.assertEqual(payload.resolved_count, 0)
+        self.assertFalse(payload.fully_resolved)
+
+    def test_dangling_typed_dependency_prevents_confirmed_empty(self) -> None:
+        record = self._dep_record_with_typed([{
+            "id": "r1", "type": "dependency", "arity": "binary",
+            "source": "word:ghost", "target": "analysis:e1",
+            "status": "established",
+        }])
+        payload = authoritative_payload(record, "dependencies")
+        self.assertIsNot(payload.state, AuthoritativePayloadState.CONFIRMED_EMPTY)
+        spec = dimension_spec("dependencies")
+        self.assertFalse(confirmed_empty_eligible(record, spec, payload))
+
+    def test_dangling_typed_dependency_not_scoreable(self) -> None:
+        record = self._dep_record_with_typed([{
+            "id": "r1", "type": "dependency", "arity": "binary",
+            "source": "word:ghost", "target": "analysis:e1",
+            "status": "established",
+        }])
+        decision = resolve_scoring_eligibility(record, "dependencies")
+        self.assertFalse(decision.scoreable)
+
+    def test_valid_analysis_local_dependency_contributes_resolved(self) -> None:
+        record = self._dep_record_with_typed([{
+            "id": "r1", "type": "dependency", "arity": "binary",
+            "source": "analysis:e1", "target": "analysis:e2",
+            "status": "established",
+        }])
+        payload = authoritative_payload(record, "dependencies")
+        self.assertEqual(payload.applicable_count, 1)
+        self.assertEqual(payload.resolved_count, 1)
+        self.assertEqual(payload.missing_count, 0)
+        self.assertIsNot(payload.state, AuthoritativePayloadState.CONFIRMED_EMPTY)
+
+    def test_valid_analysis_local_dependency_prevents_confirmed_empty(self) -> None:
+        record = self._dep_record_with_typed([{
+            "id": "r1", "type": "dependency", "arity": "binary",
+            "source": "analysis:e1", "target": "analysis:e2",
+            "status": "established",
+        }])
+        payload = authoritative_payload(record, "dependencies")
+        spec = dimension_spec("dependencies")
+        self.assertFalse(confirmed_empty_eligible(record, spec, payload))
+
+    def test_complete_valid_plus_dangling_dependency_not_fully_resolved(self) -> None:
+        record = self._dep_record_with_typed(
+            [
+                {
+                    "id": "r_valid", "type": "dependency", "arity": "binary",
+                    "source": "analysis:e1", "target": "analysis:e2",
+                    "status": "established",
+                },
+                {
+                    "id": "r_invalid", "type": "dependency", "arity": "binary",
+                    "source": "word:ghost", "target": "analysis:e1",
+                    "status": "established",
+                },
+            ],
+            evidence="present",
+        )
+        payload = authoritative_payload(record, "dependencies")
+        self.assertIs(payload.state, AuthoritativePayloadState.PRESENT)
+        self.assertGreaterEqual(payload.resolved_count, 1)
+        self.assertGreaterEqual(payload.missing_count, 1)
+        self.assertFalse(payload.fully_resolved)
+
+    def test_complete_valid_plus_dangling_dependency_not_scoreable(self) -> None:
+        record = self._dep_record_with_typed(
+            [
+                {
+                    "id": "r_valid", "type": "dependency", "arity": "binary",
+                    "source": "analysis:e1", "target": "analysis:e2",
+                    "status": "established",
+                },
+                {
+                    "id": "r_invalid", "type": "dependency", "arity": "binary",
+                    "source": "word:ghost", "target": "analysis:e1",
+                    "status": "established",
+                },
+            ],
+            evidence="present",
+        )
+        decision = resolve_scoring_eligibility(record, "dependencies")
+        self.assertFalse(decision.scoreable)
+
+    def test_complete_valid_plus_dangling_construction_not_fully_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["annotation_scope"]["dimensions"] = [
+            declaration("construction_relations", {"kind": "record"}),
+        ]
+        ta = record["canonical_analysis"]["typed_analysis"]
+        ta["status"] = "established"
+        ta["entities"] = [
+            {"id": "e1", "kind": "clause"},
+            {"id": "e2", "kind": "clause"},
+        ]
+        ta["relations"] = [
+            {
+                "id": "r_valid", "type": "construction", "arity": "binary",
+                "source": "analysis:e1", "target": "analysis:e2",
+                "status": "established",
+            },
+            {
+                "id": "r_invalid", "type": "construction", "arity": "binary",
+                "source": "word:ghost", "target": "analysis:e1",
+                "status": "established",
+            },
+        ]
+        payload = authoritative_payload(record, "construction_relations")
+        self.assertIs(payload.state, AuthoritativePayloadState.PRESENT)
+        self.assertGreaterEqual(payload.resolved_count, 1)
+        self.assertGreaterEqual(payload.missing_count, 1)
+        self.assertFalse(payload.fully_resolved)
+
+    def test_complete_valid_plus_dangling_construction_not_scoreable(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["annotation_scope"]["dimensions"] = [
+            declaration("construction_relations", {"kind": "record"}),
+        ]
+        ta = record["canonical_analysis"]["typed_analysis"]
+        ta["status"] = "established"
+        ta["entities"] = [
+            {"id": "e1", "kind": "clause"},
+            {"id": "e2", "kind": "clause"},
+        ]
+        ta["relations"] = [
+            {
+                "id": "r_valid", "type": "construction", "arity": "binary",
+                "source": "analysis:e1", "target": "analysis:e2",
+                "status": "established",
+            },
+            {
+                "id": "r_invalid", "type": "construction", "arity": "binary",
+                "source": "word:ghost", "target": "analysis:e1",
+                "status": "established",
+            },
+        ]
+        decision = resolve_scoring_eligibility(record, "construction_relations")
+        self.assertFalse(decision.scoreable)
+
+    def test_valid_sibling_relation_remains_projectable(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["construction_type"] = "transitive"
+        record = with_declaration(record, declaration("construction_relations", {"kind": "record"}))
+        ta = record["canonical_analysis"]["typed_analysis"]
+        ta["status"] = "established"
+        ta["entities"] = [{"id": "e1", "kind": "clause"}]
+        ta["relations"] = [
+            {
+                "id": "r_valid", "type": "construction", "arity": "binary",
+                "source": "word:w1", "target": "constituent:subj",
+                "status": "established",
+            },
+            {
+                "id": "r_invalid", "type": "construction", "arity": "binary",
+                "source": "word:ghost", "target": "analysis:e1",
+                "status": "established",
+            },
+        ]
+        projection = linguistic_projection(record)
+        typed_analysis = projection.get("canonical_analysis", {}).get("typed_analysis", {})
+        relations = typed_analysis.get("relations", [])
+        relation_ids = {r.get("id") for r in relations}
+        self.assertIn("r_valid", relation_ids)
+        self.assertNotIn("r_invalid", relation_ids)
+
+    def test_invalid_relation_omitted_from_projection(self) -> None:
+        record = self._dep_record_with_typed(
+            [{
+                "id": "r_invalid", "type": "dependency", "arity": "binary",
+                "source": "word:ghost", "target": "analysis:e1",
+                "status": "established",
+            }],
+            evidence="present",
+        )
+        projection = linguistic_projection(record)
+        typed_analysis = projection.get("canonical_analysis", {}).get("typed_analysis", {})
+        relations = typed_analysis.get("relations", [])
+        self.assertEqual(len(relations), 0)
+
+    def test_genuine_empty_record_with_no_typed_authority_still_confirmed_empty(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["dependencies"] = []
+        record["canonical_analysis"]["typed_analysis"]["relations"] = []
+        record["annotation_scope"]["dimensions"] = [
+            declaration("dependencies", {"kind": "record"}, evidence="empty"),
+        ]
+        payload = authoritative_payload(record, "dependencies")
+        self.assertIs(payload.state, AuthoritativePayloadState.CONFIRMED_EMPTY)
+        spec = dimension_spec("dependencies")
+        self.assertTrue(confirmed_empty_eligible(record, spec, payload))
+        decision = resolve_scoring_eligibility(record, "dependencies")
+        self.assertTrue(decision.scoreable)
+
+    def test_more_specific_node_scope_excludes_record_typed_relation(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["annotation_scope"]["dimensions"] = [
+            declaration("vp_complementation", {"kind": "record"}),
+            declaration("vp_complementation", {"kind": "node", "node": "subj"}),
+        ]
+        ta = record["canonical_analysis"]["typed_analysis"]
+        ta["status"] = "established"
+        ta["relations"] = [{
+            "id": "r1", "type": "selection", "arity": "binary",
+            "source": "constituent:subj", "target": "constituent:subj",
+            "status": "established",
+        }]
+        record_payload = authoritative_payload(record, "vp_complementation")
+        node_payload = authoritative_payload(record, "vp_complementation", "subj")
+        self.assertEqual(node_payload.applicable_count, 1)
+        self.assertEqual(record_payload.applicable_count, 0)
+
+    def test_analysis_local_relation_not_invented_into_node_scope(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["annotation_scope"]["dimensions"] = [
+            declaration("vp_complementation", {"kind": "node", "node": "subj"}),
+        ]
+        ta = record["canonical_analysis"]["typed_analysis"]
+        ta["status"] = "established"
+        ta["entities"] = [
+            {"id": "e1", "kind": "clause"},
+            {"id": "e2", "kind": "clause"},
+        ]
+        ta["relations"] = [{
+            "id": "r1", "type": "selection", "arity": "binary",
+            "source": "analysis:e1", "target": "analysis:e2",
+            "status": "established",
+        }]
+        node_payload = authoritative_payload(record, "vp_complementation", "subj")
+        self.assertEqual(node_payload.applicable_count, 0)
+
+    def test_analysis_local_relation_not_invented_into_region_scope(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["annotation_scope"]["dimensions"] = [
+            declaration("vp_complementation", {"kind": "region", "start": 0, "end": 3}),
+        ]
+        ta = record["canonical_analysis"]["typed_analysis"]
+        ta["status"] = "established"
+        ta["entities"] = [
+            {"id": "e1", "kind": "clause"},
+            {"id": "e2", "kind": "clause"},
+        ]
+        ta["relations"] = [{
+            "id": "r1", "type": "selection", "arity": "binary",
+            "source": "analysis:e1", "target": "analysis:e2",
+            "status": "established",
+        }]
+        region_payload = authoritative_payload(record, "vp_complementation", {"kind": "region", "start": 0, "end": 3})
+        self.assertEqual(region_payload.applicable_count, 0)
 
 
 if __name__ == "__main__":

@@ -57,6 +57,7 @@ try:
         TypedRelationValidationContext,
         _canonical_dependency_pairs,
         CANONICAL_SCALAR_RELATION_TYPES,
+        parse_typed_reference,
     )
 except ImportError:
     from scripts.typed_relation_contract import (
@@ -67,6 +68,7 @@ except ImportError:
         TypedRelationValidationContext,
         _canonical_dependency_pairs,
         CANONICAL_SCALAR_RELATION_TYPES,
+        parse_typed_reference,
     )
 
 
@@ -708,6 +710,68 @@ def _typed_relation_status(
     )
 
 
+_CANONICAL_TYPED_REFERENCE_NAMESPACES = frozenset({"word", "constituent", "clause"})
+
+
+def _typed_relation_canonical_targets(
+    record: dict[str, Any],
+    relation: dict[str, Any],
+) -> list[str]:
+    """Return canonical object IDs referenced by a typed relation's endpoints.
+
+    Only word/constituent/clause namespace references that resolve to actual
+    canonical objects are routing targets. Analysis-local and dangling
+    references are not canonical routing targets.
+    """
+    objects = _record_objects(record)
+    targets: list[str] = []
+    for reference_field in ("source", "target"):
+        parsed = parse_typed_reference(relation.get(reference_field))
+        if parsed is None:
+            continue
+        namespace, identifier = parsed
+        if namespace in _CANONICAL_TYPED_REFERENCE_NAMESPACES and identifier in objects:
+            targets.append(identifier)
+    return targets
+
+
+def _typed_relation_owned_in_scope(
+    record: dict[str, Any],
+    dimension: str,
+    relation: dict[str, Any],
+    scope: dict[str, Any],
+) -> bool:
+    """Typed-relation-specific scope routing.
+
+    Canonical routing targets (word/constituent/clause references resolving to
+    actual objects) determine node/region ownership. When no canonical routing
+    target exists, record scope is the fallback authority location.
+    """
+    canonical_targets = _typed_relation_canonical_targets(record, relation)
+    kind = scope.get("kind")
+
+    if kind == "record":
+        if not canonical_targets:
+            return True
+        for target in canonical_targets:
+            if not _more_specific_scope(record, dimension, target, scope):
+                return True
+        return False
+
+    if kind == "node":
+        return scope.get("node") in canonical_targets
+
+    if kind == "region":
+        objects = _record_objects(record)
+        return any(
+            _in_scope(record, objects[target], scope)
+            for target in canonical_targets
+            if target in objects
+        )
+
+    return False
+
+
 def _typed_relation_items(
     record: dict[str, Any],
     spec: DimensionSpec,
@@ -746,15 +810,7 @@ def _typed_relation_items(
         for index, relation in enumerate(relations):
             if not isinstance(relation, dict) or relation.get("type") not in relation_types:
                 continue
-            references = _payload_targets(record, "typed_relation", relation)
-            if scope.get("kind") != "record":
-                if scope.get("kind") == "node" and scope.get("node") not in references:
-                    continue
-                if scope.get("kind") == "region":
-                    objects = _record_objects(record)
-                    if not any(_in_scope(record, objects[reference], scope) for reference in references if reference in objects):
-                        continue
-            if not _payload_owned_in_scope(record, spec.name, references, scope):
+            if not _typed_relation_owned_in_scope(record, spec.name, relation, scope):
                 continue
             identifier = relation.get("id") if isinstance(relation.get("id"), str) else f"typed_relation[{index}]"
             status = _typed_relation_status(
