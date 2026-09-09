@@ -971,10 +971,11 @@ def _add_reference_shells(record: dict[str, Any], projection: dict[str, Any]) ->
                     shell["span"] = copy.deepcopy(source["span"])
             else:
                 shell = {"id": identifier, "node_kind": source.get("node_kind", "phrase")}
-                if "span" in source:
-                    shell["span"] = copy.deepcopy(source["span"])
-                if isinstance(source.get("clause_ref"), str):
-                    shell["clause_ref"] = source["clause_ref"]
+                if _constituent_status(record, source) == "resolved":
+                    if "span" in source:
+                        shell["span"] = copy.deepcopy(source["span"])
+                    if isinstance(source.get("clause_ref"), str):
+                        shell["clause_ref"] = source["clause_ref"]
             projection.setdefault(collection, []).append(shell)
             added = True
         if not added:

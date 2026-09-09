@@ -317,6 +317,86 @@ class CoverageAwareProjectionTests(unittest.TestCase):
         self.assertNotIn("clauses", projection)
         self.assertNotIn("subordinate", json.dumps(projection, ensure_ascii=False))
 
+    def test_invalid_phrase_shell_does_not_resurrect_clause_ref(self) -> None:
+        record = record_with(declaration("dependencies", {"kind": "record"}))
+        record["constituents"].append({
+            "id": "obj2", "node_kind": "phrase", "span": {"start": 3, "end": 5},
+            "phrase_category": "NP", "clause_ref": "ghost", "function": "object",
+        })
+        record["dependencies"] = [{"relation": "obj", "head": "w2", "dependent": "obj2"}]
+        payload = linguistic_projection(record)
+        self.assertIn("dependencies", payload)
+        by_id = {item["id"]: item for item in payload.get("constituents", [])}
+        self.assertIn("obj2", by_id)
+        shell = by_id["obj2"]
+        self.assertEqual(shell["node_kind"], "phrase")
+        self.assertNotIn("clause_ref", shell)
+        self.assertNotIn("phrase_category", shell)
+        self.assertNotIn("function", shell)
+        self.assertNotIn("span", shell)
+        self.assertNotIn("ghost", json.dumps(payload))
+
+    def test_invalid_clause_wrapper_shell_does_not_resurrect_properties(self) -> None:
+        record = record_with(declaration("dependencies", {"kind": "record"}))
+        record["constituents"].append({
+            "id": "wrapper1", "node_kind": "clause", "span": {"start": 1, "end": 5},
+            "clause_ref": "c0", "function": "complement",
+            "realization": {"clause_ref": "c0", "relation": "same_span_alias"},
+            "span_relation": "same_span_alias",
+        })
+        record["dependencies"] = [{"relation": "comp", "head": "w2", "dependent": "wrapper1"}]
+        payload = linguistic_projection(record)
+        self.assertIn("dependencies", payload)
+        by_id = {item["id"]: item for item in payload.get("constituents", [])}
+        self.assertIn("wrapper1", by_id)
+        shell = by_id["wrapper1"]
+        self.assertEqual(shell["node_kind"], "clause")
+        self.assertNotIn("clause_ref", shell)
+        self.assertNotIn("function", shell)
+        self.assertNotIn("realization", shell)
+        self.assertNotIn("span_relation", shell)
+        self.assertNotIn("span", shell)
+
+    def test_invalid_constituent_bad_span_shell_does_not_copy_span(self) -> None:
+        record = record_with(declaration("dependencies", {"kind": "record"}))
+        record["constituents"].append({
+            "id": "bad_span", "node_kind": "phrase", "span": {"start": 99, "end": 100},
+            "phrase_category": "NP", "function": "object",
+        })
+        record["dependencies"] = [{"relation": "obj", "head": "w2", "dependent": "bad_span"}]
+        payload = linguistic_projection(record)
+        self.assertIn("dependencies", payload)
+        by_id = {item["id"]: item for item in payload.get("constituents", [])}
+        self.assertIn("bad_span", by_id)
+        shell = by_id["bad_span"]
+        self.assertNotIn("span", shell)
+        self.assertNotIn("phrase_category", shell)
+        self.assertNotIn("function", shell)
+
+    def test_valid_constituent_referenced_by_dependency_gets_safe_shell(self) -> None:
+        record = record_with(
+            declaration("dependencies", {"kind": "record"}),
+            declaration("phrase_constituency", {"kind": "record"}, "omitted", "intentional", "unannotated"),
+        )
+        record["dependencies"] = [{"relation": "obj", "head": "w2", "dependent": "obj"}]
+        payload = linguistic_projection(record)
+        self.assertIn("dependencies", payload)
+        by_id = {item["id"]: item for item in payload.get("constituents", [])}
+        self.assertIn("obj", by_id)
+        shell = by_id["obj"]
+        self.assertEqual(shell["id"], "obj")
+        self.assertEqual(shell["node_kind"], "phrase")
+
+    def test_rendered_reference_graph_has_no_dangling_references_after_shell_repair(self) -> None:
+        record = record_with(declaration("dependencies", {"kind": "record"}))
+        record["constituents"].append({
+            "id": "obj2", "node_kind": "phrase", "span": {"start": 3, "end": 5},
+            "phrase_category": "NP", "clause_ref": "ghost", "function": "object",
+        })
+        record["dependencies"] = [{"relation": "obj", "head": "w2", "dependent": "obj2"}]
+        rendered = render_record(record)
+        self.assertEqual(validate_record(rendered, "rendered"), [])
+
     def test_exact_end_to_end_scenario(self) -> None:
         record = record_with(
             declaration("clause_structure", {"kind": "record"}),
