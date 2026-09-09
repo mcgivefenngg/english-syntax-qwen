@@ -518,12 +518,17 @@ def _clause_wrapper_realization_is_valid(
 
 
 def _constituent_status(record: dict[str, Any], item: dict[str, Any]) -> str:
-    """Canonical payload status for one constituent-family node.
+    """Canonical structural admission for one constituent-family node.
 
-    Resolved requires every constituent-owned payload property to satisfy the
-    canonical contract: identity, structural span, phrase category or existing
-    clause reference, span_relation agreement, and head/parent reference kinds.
-    Function and realization are syntactic-function-owned and stay out of scope.
+    A constituent must satisfy this shared structural contract before any
+    dimension may project its linguistic properties. Resolved requires every
+    constituent-owned payload property to satisfy the canonical contract:
+    identity, structural span, phrase category or existing clause reference,
+    span_relation agreement, head/parent reference kinds, and the prohibition
+    of wrapper-only fields on phrase nodes.
+
+    Function and realization are syntactic-function-owned and stay out of
+    scope for phrase-constituency, but structural admission still applies.
     """
     if not isinstance(item.get("id"), str) or not item.get("id"):
         return "missing"
@@ -535,6 +540,10 @@ def _constituent_status(record: dict[str, Any], item: dict[str, Any]) -> str:
     if node_kind == "phrase":
         category = item.get("phrase_category")
         if category not in PHRASE_CATEGORIES or category == "word":
+            return "missing"
+        if "clause_ref" in item:
+            return "missing"
+        if "category" in item:
             return "missing"
     elif node_kind == "clause":
         if item.get("phrase_category") is not None:
@@ -944,7 +953,11 @@ def _collect_functions(record: dict[str, Any], spec: DimensionSpec, scope: dict[
                 if not _payload_owned_in_scope(record, spec.name, targets, scope):
                     continue
                 identifier = item.get("id") if isinstance(item.get("id"), str) else "constituent"
-                status = "resolved" if isinstance(item.get("function"), str) and item["function"] else "missing"
+                structural_status = _constituent_status(record, item)
+                if structural_status != "resolved":
+                    status = structural_status
+                else:
+                    status = "resolved" if isinstance(item.get("function"), str) and item["function"] else "missing"
                 accumulator.add(identifier, "constituents", status)
     if _has_field(spec, "words"):
         words = record.get("words")

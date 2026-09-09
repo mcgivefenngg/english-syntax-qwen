@@ -838,9 +838,7 @@ class CanonicalNodePayloadIntegrityTests(unittest.TestCase):
         ))
         projection = linguistic_projection(record)
         projected_constituents = {c["id"]: c for c in (projection.get("constituents") or [])}
-        self.assertIn("emb", projected_constituents)
-        self.assertNotIn("phrase_category", projected_constituents["emb"])
-        self.assertNotIn("span_relation", projected_constituents["emb"])
+        self.assertNotIn("emb", projected_constituents)
 
     def test_unrelated_valid_constituent_remains_positive(self) -> None:
         record = copy.deepcopy(FIXTURE)
@@ -2878,6 +2876,244 @@ class H2R1aMalformedTypedRelationRecordScopeTests(unittest.TestCase):
         self.assertFalse(record_payload.fully_resolved)
         decision = resolve_scoring_eligibility(record, "vp_complementation")
         self.assertFalse(decision.scoreable)
+
+
+class H2B02PhraseForbiddenFieldTests(unittest.TestCase):
+    """B02: Phrase constituents with forbidden wrapper-only fields must fail structural admission."""
+
+    def test_valid_phrase_remains_resolved(self) -> None:
+        payload = authoritative_payload(FIXTURE, "phrase_constituency", "subj")
+        self.assertIs(payload.state, AuthoritativePayloadState.PRESENT)
+        self.assertTrue(payload.fully_resolved)
+
+    def test_phrase_with_forbidden_clause_ref_is_missing(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["constituents"][1]["clause_ref"] = "ghost"
+        self.assertTrue(any("clause_ref is reserved" in error for error in validate_record(record, "b02-phrase-clause-ref")))
+        payload = authoritative_payload(record, "phrase_constituency", "obj")
+        self.assertIs(payload.state, AuthoritativePayloadState.ABSENT)
+        self.assertEqual(payload.missing_count, 1)
+
+    def test_phrase_with_forbidden_category_field_is_missing(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["constituents"][1]["category"] = "NP"
+        self.assertTrue(any("V0.2 phrase nodes must use phrase_category" in error for error in validate_record(record, "b02-phrase-category")))
+        payload = authoritative_payload(record, "phrase_constituency", "obj")
+        self.assertIs(payload.state, AuthoritativePayloadState.ABSENT)
+        self.assertEqual(payload.missing_count, 1)
+
+    def test_b02_complete_mixed_valid_and_invalid_phrase(self) -> None:
+        record = with_declaration(FIXTURE, declaration("phrase_constituency", {"kind": "record"}))
+        record["constituents"][1]["clause_ref"] = "ghost"
+        payload = authoritative_payload(record, "phrase_constituency")
+        self.assertIs(payload.state, AuthoritativePayloadState.PRESENT)
+        self.assertGreater(payload.resolved_count, 0)
+        self.assertGreater(payload.missing_count, 0)
+        self.assertFalse(payload.fully_resolved)
+
+    def test_b02_scoring_false(self) -> None:
+        record = with_declaration(FIXTURE, declaration("phrase_constituency", {"kind": "record"}))
+        record["constituents"][1]["clause_ref"] = "ghost"
+        decision = resolve_scoring_eligibility(record, "phrase_constituency")
+        self.assertFalse(decision.scoreable)
+
+    def test_b02_renderer_omits_invalid_phrase_positive_gold(self) -> None:
+        record = with_declaration(FIXTURE, declaration("phrase_constituency", {"kind": "record"}))
+        record = with_declaration(record, declaration("syntactic_function", {"kind": "record"}))
+        record["constituents"][1]["clause_ref"] = "ghost"
+        projection = linguistic_projection(record)
+        by_id = {c["id"]: c for c in (projection.get("constituents") or [])}
+        self.assertNotIn("obj", by_id)
+
+    def test_b02_valid_sibling_phrase_still_projects(self) -> None:
+        record = with_declaration(FIXTURE, declaration("phrase_constituency", {"kind": "record"}))
+        record["constituents"][1]["clause_ref"] = "ghost"
+        payload = authoritative_payload(record, "phrase_constituency", "subj")
+        self.assertIs(payload.state, AuthoritativePayloadState.PRESENT)
+        self.assertTrue(payload.fully_resolved)
+
+    def test_b02_target_query_for_invalid_phrase_not_positive(self) -> None:
+        record = with_declaration(FIXTURE, declaration("phrase_constituency", {"kind": "record"}))
+        record["constituents"][1]["clause_ref"] = "ghost"
+        payload = authoritative_payload(record, "phrase_constituency", "obj")
+        self.assertIs(payload.state, AuthoritativePayloadState.ABSENT)
+        self.assertFalse(payload.has_resolved_content)
+
+    def test_b02_valid_clause_wrapper_control_remains_resolved(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        wrapper = {
+            "id": "emb",
+            "node_kind": "clause",
+            "clause_ref": "c0",
+            "span": {"start": 0, "end": 5},
+            "function": "complement",
+            "realization": {"clause_ref": "c0", "relation": "same_span_alias"},
+            "span_relation": "same_span_alias",
+        }
+        record["constituents"].append(wrapper)
+        payload = authoritative_payload(record, "phrase_constituency", "emb")
+        self.assertIs(payload.state, AuthoritativePayloadState.PRESENT)
+        self.assertTrue(payload.fully_resolved)
+
+
+class H2B03SyntacticFunctionAuthorityTests(unittest.TestCase):
+    """B03: Syntactic-function collector must validate constituent structural admission."""
+
+    def test_valid_constituent_function_remains_resolved(self) -> None:
+        payload = authoritative_payload(FIXTURE, "syntactic_function", "obj")
+        self.assertIs(payload.state, AuthoritativePayloadState.PRESENT)
+        self.assertTrue(payload.fully_resolved)
+
+    def test_b03_invalid_clause_wrapper_with_valid_function_is_missing(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        wrapper = {
+            "id": "wrapper1",
+            "node_kind": "clause",
+            "clause_ref": "c0",
+            "span": {"start": 1, "end": 5},
+            "function": "complement",
+            "realization": {"clause_ref": "c0", "relation": "same_span_alias"},
+            "span_relation": "same_span_alias",
+        }
+        record["constituents"].append(wrapper)
+        self.assertTrue(any("same_span_alias requires wrapper and clause spans to match" in error for error in validate_record(record, "b03-same-span-mismatch")))
+        payload = authoritative_payload(record, "syntactic_function", "wrapper1")
+        self.assertIs(payload.state, AuthoritativePayloadState.ABSENT)
+        self.assertEqual(payload.missing_count, 1)
+
+    def test_b03_same_span_mismatch_reproduction(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        wrapper = {
+            "id": "wrapper1",
+            "node_kind": "clause",
+            "clause_ref": "c0",
+            "span": {"start": 1, "end": 5},
+            "function": "complement",
+            "realization": {"clause_ref": "c0", "relation": "same_span_alias"},
+            "span_relation": "same_span_alias",
+        }
+        record["constituents"].append(wrapper)
+        payload = authoritative_payload(record, "syntactic_function", "wrapper1")
+        self.assertIs(payload.state, AuthoritativePayloadState.ABSENT)
+        self.assertFalse(payload.has_resolved_content)
+
+    def test_b03_expanded_realization_mismatch(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        wrapper = {
+            "id": "wrapper1",
+            "node_kind": "clause",
+            "clause_ref": "c0",
+            "span": {"start": 1, "end": 4},
+            "function": "complement",
+            "realization": {"clause_ref": "c0", "relation": "expanded_realization"},
+            "span_relation": "expanded_realization",
+        }
+        record["constituents"].append(wrapper)
+        self.assertTrue(any("expanded_realization wrapper must contain the clause span" in error for error in validate_record(record, "b03-expanded-mismatch")))
+        payload = authoritative_payload(record, "syntactic_function", "wrapper1")
+        self.assertIs(payload.state, AuthoritativePayloadState.ABSENT)
+
+    def test_b03_dangling_clause_ref_wrapper_with_valid_function(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        wrapper = {
+            "id": "wrapper1",
+            "node_kind": "clause",
+            "clause_ref": "ghost",
+            "span": {"start": 0, "end": 5},
+            "function": "complement",
+            "realization": {"clause_ref": "ghost", "relation": "other"},
+        }
+        record["constituents"].append(wrapper)
+        payload = authoritative_payload(record, "syntactic_function", "wrapper1")
+        self.assertIs(payload.state, AuthoritativePayloadState.ABSENT)
+        self.assertEqual(payload.missing_count, 1)
+
+    def test_b03_complete_valid_function_sibling_and_invalid_wrapper(self) -> None:
+        record = with_declaration(FIXTURE, declaration("syntactic_function", {"kind": "record"}))
+        wrapper = {
+            "id": "wrapper1",
+            "node_kind": "clause",
+            "clause_ref": "c0",
+            "span": {"start": 1, "end": 5},
+            "function": "complement",
+            "realization": {"clause_ref": "c0", "relation": "same_span_alias"},
+            "span_relation": "same_span_alias",
+        }
+        record["constituents"].append(wrapper)
+        payload = authoritative_payload(record, "syntactic_function")
+        self.assertIs(payload.state, AuthoritativePayloadState.PRESENT)
+        self.assertGreater(payload.resolved_count, 0)
+        self.assertGreater(payload.missing_count, 0)
+        self.assertFalse(payload.fully_resolved)
+
+    def test_b03_scoring_false(self) -> None:
+        record = with_declaration(FIXTURE, declaration("syntactic_function", {"kind": "record"}))
+        wrapper = {
+            "id": "wrapper1",
+            "node_kind": "clause",
+            "clause_ref": "c0",
+            "span": {"start": 1, "end": 5},
+            "function": "complement",
+            "realization": {"clause_ref": "c0", "relation": "same_span_alias"},
+            "span_relation": "same_span_alias",
+        }
+        record["constituents"].append(wrapper)
+        decision = resolve_scoring_eligibility(record, "syntactic_function")
+        self.assertFalse(decision.scoreable)
+
+    def test_b03_renderer_omits_invalid_wrapper_function(self) -> None:
+        record = with_declaration(FIXTURE, declaration("syntactic_function", {"kind": "record"}))
+        record = with_declaration(record, declaration("phrase_constituency", {"kind": "record"}))
+        wrapper = {
+            "id": "wrapper1",
+            "node_kind": "clause",
+            "clause_ref": "c0",
+            "span": {"start": 1, "end": 5},
+            "function": "complement",
+            "realization": {"clause_ref": "c0", "relation": "same_span_alias"},
+            "span_relation": "same_span_alias",
+        }
+        record["constituents"].append(wrapper)
+        projection = linguistic_projection(record)
+        by_id = {c["id"]: c for c in (projection.get("constituents") or [])}
+        self.assertNotIn("wrapper1", by_id)
+
+    def test_b03_invalid_wrapper_realization_does_not_leak_through_valid_clause_coverage(self) -> None:
+        record = with_declaration(FIXTURE, declaration("syntactic_function", {"kind": "record"}))
+        record = with_declaration(record, declaration("clause_structure", {"kind": "record"}))
+        wrapper = {
+            "id": "wrapper1",
+            "node_kind": "clause",
+            "clause_ref": "c0",
+            "span": {"start": 1, "end": 5},
+            "function": "complement",
+            "realization": {"clause_ref": "c0", "relation": "same_span_alias"},
+            "span_relation": "same_span_alias",
+        }
+        record["constituents"].append(wrapper)
+        projection = linguistic_projection(record)
+        by_id = {c["id"]: c for c in (projection.get("constituents") or [])}
+        self.assertNotIn("wrapper1", by_id)
+        clauses_by_id = {c["id"]: c for c in (projection.get("clauses") or [])}
+        self.assertIn("c0", clauses_by_id)
+
+    def test_b03_valid_referenced_clause_still_projects_independently(self) -> None:
+        record = with_declaration(FIXTURE, declaration("clause_structure", {"kind": "record"}))
+        wrapper = {
+            "id": "wrapper1",
+            "node_kind": "clause",
+            "clause_ref": "c0",
+            "span": {"start": 1, "end": 5},
+            "function": "complement",
+            "realization": {"clause_ref": "c0", "relation": "same_span_alias"},
+            "span_relation": "same_span_alias",
+        }
+        record["constituents"].append(wrapper)
+        clause_payload = authoritative_payload(record, "clause_structure", "c0")
+        self.assertIs(clause_payload.state, AuthoritativePayloadState.PRESENT)
+        self.assertTrue(clause_payload.fully_resolved)
+        wrapper_payload = authoritative_payload(record, "syntactic_function", "wrapper1")
+        self.assertIs(wrapper_payload.state, AuthoritativePayloadState.ABSENT)
 
 
 if __name__ == "__main__":

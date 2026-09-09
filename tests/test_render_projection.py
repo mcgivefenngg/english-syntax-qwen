@@ -49,8 +49,8 @@ class CoverageAwareProjectionTests(unittest.TestCase):
         )
         for constituent in record["constituents"]:
             constituent.pop("phrase_category", None)
-        constituents = linguistic_projection(record)["constituents"]
-        self.assertEqual(constituents, [{"id": "obj", "node_kind": "phrase", "span": {"start": 3, "end": 5}, "function": "object"}])
+        projection = linguistic_projection(record)
+        self.assertNotIn("constituents", projection)
 
     def test_subject_internal_structure_is_kept_object_internal_is_omitted(self) -> None:
         record = record_with(
@@ -307,10 +307,7 @@ class CoverageAwareProjectionTests(unittest.TestCase):
         )
         record["constituents"][0]["head"] = "ghost"
         by_id = {item["id"]: item for item in linguistic_projection(record)["constituents"]}
-        self.assertEqual(
-            by_id["subj"],
-            {"id": "subj", "node_kind": "phrase", "span": {"start": 0, "end": 2}, "function": "subject"},
-        )
+        self.assertNotIn("subj", by_id)
         self.assertEqual(by_id["obj"]["phrase_category"], "NP")
 
     def test_invalid_clause_does_not_become_positive_clause_supervision(self) -> None:

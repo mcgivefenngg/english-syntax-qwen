@@ -15,9 +15,9 @@ except ImportError:
     from scripts.coverage_resolution import CoverageResolutionError, CoverageState, collection_item_coverage_state, resolve_coverage, declared_coverage_state
 
 try:
-    from authoritative_payload import authoritative_payload, _dependency_status, _lexical_valency_status, _record_objects, _semantic_role_status, _constituent_ids
+    from authoritative_payload import authoritative_payload, _dependency_status, _lexical_valency_status, _record_objects, _semantic_role_status, _constituent_ids, _constituent_status
 except ImportError:
-    from scripts.authoritative_payload import authoritative_payload, _dependency_status, _lexical_valency_status, _record_objects, _semantic_role_status, _constituent_ids
+    from scripts.authoritative_payload import authoritative_payload, _dependency_status, _lexical_valency_status, _record_objects, _semantic_role_status, _constituent_ids, _constituent_status
 
 try:
     from collection_contract import normalize_collection_item
@@ -427,6 +427,7 @@ def _project_constituents(record: dict[str, Any], rendering_mode: str) -> list[d
         if not isinstance(source, dict) or not isinstance(source.get("id"), str):
             continue
         identifier = source["id"]
+        structural_status = _constituent_status(record, source)
         phrase_covered = _property_covered(record, "constituents", "phrase_category", identifier)
         internal_covered = _np_internal_covered(record, source)
         function_covered = _property_covered(record, "constituents", "function", identifier)
@@ -436,6 +437,10 @@ def _project_constituents(record: dict[str, Any], rendering_mode: str) -> list[d
             internal_covered = False
             if function_covered and not _explicit_nonrecord_coverage(record, "syntactic_function", identifier):
                 function_covered = False
+        if structural_status != "resolved":
+            phrase_covered = False
+            internal_covered = False
+            function_covered = False
         if not any((phrase_covered, internal_covered, function_covered)):
             continue
         item: dict[str, Any] = {"id": identifier, "node_kind": source.get("node_kind", "phrase")}
