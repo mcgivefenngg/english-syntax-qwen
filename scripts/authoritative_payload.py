@@ -755,39 +755,13 @@ def _typed_relation_canonical_targets(
     return targets
 
 
-def _typed_relation_all_endpoints_routable(
-    record: dict[str, Any],
-    relation: dict[str, Any],
-) -> bool:
-    """Check whether every present endpoint of a typed relation is routable.
-
-    Returns False if any endpoint is unparseable, uses an unknown namespace,
-    or references a missing identifier in the namespace-specific collection.
-    Analysis-local references are not canonical routing targets but are
-    considered routable for scope-exclusion purposes.
-    """
-    for reference_field in ("source", "target"):
-        reference = relation.get(reference_field)
-        if reference is None:
-            continue
-        parsed = parse_typed_reference(reference)
-        if parsed is None:
-            return False
-        namespace, identifier = parsed
-        if namespace == "analysis":
-            continue
-        if namespace not in _CANONICAL_TYPED_REFERENCE_NAMESPACES:
-            return False
-        if not _namespace_collection_has_id(record, namespace, identifier):
-            return False
-    return True
-
-
 def _typed_relation_owned_in_scope(
     record: dict[str, Any],
     dimension: str,
     relation: dict[str, Any],
     scope: dict[str, Any],
+    *,
+    relation_status: str | None = None,
 ) -> bool:
     """Typed-relation-specific scope routing.
 
@@ -796,18 +770,18 @@ def _typed_relation_owned_in_scope(
     ownership. When no canonical routing target exists, record scope is the
     fallback authority location.
 
-    A relation with any malformed/unroutable endpoint must not be excluded from
-    record scope by more-specific ownership. Only structurally routable relations
-    may be excluded from record scope when all canonical targets have a
-    more-specific scope owner.
+    H2 R1b: A relation with status=missing must not be excluded from record scope
+    by more-specific ownership. Only structurally legitimate relations (status=
+    resolved/unresolved) may be excluded from record scope when all canonical
+    targets have a more-specific scope owner.
     """
     canonical_targets = _typed_relation_canonical_targets(record, relation)
     kind = scope.get("kind")
 
     if kind == "record":
-        if not canonical_targets:
+        if relation_status == "missing":
             return True
-        if not _typed_relation_all_endpoints_routable(record, relation):
+        if not canonical_targets:
             return True
         for target in canonical_targets:
             if not _more_specific_scope(record, dimension, target, scope):
@@ -866,8 +840,6 @@ def _typed_relation_items(
         for index, relation in enumerate(relations):
             if not isinstance(relation, dict) or relation.get("type") not in relation_types:
                 continue
-            if not _typed_relation_owned_in_scope(record, spec.name, relation, scope):
-                continue
             identifier = relation.get("id") if isinstance(relation.get("id"), str) else f"typed_relation[{index}]"
             status = _typed_relation_status(
                 record,
@@ -875,6 +847,14 @@ def _typed_relation_items(
                 relation,
                 context=ctx,
             )
+            if not _typed_relation_owned_in_scope(
+                record,
+                spec.name,
+                relation,
+                scope,
+                relation_status=status,
+            ):
+                continue
             accumulator.add(identifier, "typed_relation", status)
 
 

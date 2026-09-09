@@ -2721,6 +2721,164 @@ class H2R1aMalformedTypedRelationRecordScopeTests(unittest.TestCase):
         decision = resolve_scoring_eligibility(record, "vp_complementation")
         self.assertFalse(decision.scoreable)
 
+    def test_r1b_dangling_analysis_local_target(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["annotation_scope"]["dimensions"] = [
+            declaration("vp_complementation", {"kind": "record"}),
+            declaration("vp_complementation", {"kind": "node", "node": "subj"}),
+        ]
+        ta = record["canonical_analysis"]["typed_analysis"]
+        ta["status"] = "established"
+        ta["entities"] = [{"id": "e1", "type": "event"}]
+        ta["relations"] = [{
+            "id": "r1", "type": "selection", "arity": "binary",
+            "source": "constituent:subj", "target": "analysis:ghost",
+            "status": "established",
+        }]
+        record_payload = authoritative_payload(record, "vp_complementation")
+        self.assertEqual(record_payload.applicable_count, 1)
+        self.assertEqual(record_payload.missing_count, 1)
+        node_payload = authoritative_payload(record, "vp_complementation", "subj")
+        self.assertGreaterEqual(node_payload.applicable_count, 0)
+
+    def test_r1b_binary_relation_missing_target(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["annotation_scope"]["dimensions"] = [
+            declaration("vp_complementation", {"kind": "record"}),
+            declaration("vp_complementation", {"kind": "node", "node": "subj"}),
+        ]
+        ta = record["canonical_analysis"]["typed_analysis"]
+        ta["status"] = "established"
+        ta["relations"] = [{
+            "id": "r1", "type": "selection", "arity": "binary",
+            "source": "constituent:subj",
+            "status": "established",
+        }]
+        record_payload = authoritative_payload(record, "vp_complementation")
+        self.assertEqual(record_payload.applicable_count, 1)
+        self.assertEqual(record_payload.missing_count, 1)
+
+    def test_r1b_invalid_arity(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["annotation_scope"]["dimensions"] = [
+            declaration("vp_complementation", {"kind": "record"}),
+            declaration("vp_complementation", {"kind": "node", "node": "subj"}),
+        ]
+        ta = record["canonical_analysis"]["typed_analysis"]
+        ta["status"] = "established"
+        ta["relations"] = [{
+            "id": "r1", "type": "selection", "arity": "bogus",
+            "source": "constituent:subj", "target": "constituent:subj",
+            "status": "established",
+        }]
+        record_payload = authoritative_payload(record, "vp_complementation")
+        self.assertEqual(record_payload.applicable_count, 1)
+        self.assertEqual(record_payload.missing_count, 1)
+
+    def test_r1b_duplicate_relation_id(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["annotation_scope"]["dimensions"] = [
+            declaration("vp_complementation", {"kind": "record"}),
+            declaration("vp_complementation", {"kind": "node", "node": "subj"}),
+        ]
+        ta = record["canonical_analysis"]["typed_analysis"]
+        ta["status"] = "established"
+        ta["relations"] = [
+            {
+                "id": "r1", "type": "selection", "arity": "binary",
+                "source": "constituent:subj", "target": "constituent:subj",
+                "status": "established",
+            },
+            {
+                "id": "r1", "type": "selection", "arity": "binary",
+                "source": "constituent:subj", "target": "constituent:subj",
+                "status": "established",
+            },
+        ]
+        record_payload = authoritative_payload(record, "vp_complementation")
+        self.assertGreaterEqual(record_payload.applicable_count, 2)
+        self.assertGreaterEqual(record_payload.missing_count, 2)
+
+    def test_r1b_more_specific_valid_control(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["annotation_scope"]["dimensions"] = [
+            declaration("vp_complementation", {"kind": "record"}),
+            declaration("vp_complementation", {"kind": "node", "node": "subj"}),
+        ]
+        ta = record["canonical_analysis"]["typed_analysis"]
+        ta["status"] = "established"
+        ta["relations"] = [{
+            "id": "r1", "type": "selection", "arity": "binary",
+            "source": "constituent:subj", "target": "constituent:subj",
+            "status": "established",
+        }]
+        record_payload = authoritative_payload(record, "vp_complementation")
+        self.assertEqual(record_payload.applicable_count, 0)
+        node_payload = authoritative_payload(record, "vp_complementation", "subj")
+        self.assertEqual(node_payload.applicable_count, 1)
+        self.assertEqual(node_payload.resolved_count, 1)
+
+    def test_r1b_confirmed_empty_safety_analysis_ghost(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["annotation_scope"]["dimensions"] = [
+            declaration("vp_complementation", {"kind": "record"}, evidence="empty"),
+        ]
+        ta = record["canonical_analysis"]["typed_analysis"]
+        ta["status"] = "established"
+        ta["entities"] = [{"id": "e1", "type": "event"}]
+        ta["relations"] = [{
+            "id": "r1", "type": "selection", "arity": "binary",
+            "source": "constituent:subj", "target": "analysis:ghost",
+            "status": "established",
+        }]
+        payload = authoritative_payload(record, "vp_complementation")
+        self.assertIsNot(payload.state, AuthoritativePayloadState.CONFIRMED_EMPTY)
+        self.assertGreater(payload.missing_count, 0)
+
+    def test_r1b_confirmed_empty_safety_binary_missing_target(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["annotation_scope"]["dimensions"] = [
+            declaration("vp_complementation", {"kind": "record"}, evidence="empty"),
+        ]
+        ta = record["canonical_analysis"]["typed_analysis"]
+        ta["status"] = "established"
+        ta["relations"] = [{
+            "id": "r1", "type": "selection", "arity": "binary",
+            "source": "constituent:subj",
+            "status": "established",
+        }]
+        payload = authoritative_payload(record, "vp_complementation")
+        self.assertIsNot(payload.state, AuthoritativePayloadState.CONFIRMED_EMPTY)
+        self.assertGreater(payload.missing_count, 0)
+
+    def test_r1b_complete_truthfulness_mixed_valid_and_malformed(self) -> None:
+        record = copy.deepcopy(FIXTURE)
+        record["annotation_scope"]["dimensions"] = [
+            declaration("vp_complementation", {"kind": "record"}),
+            declaration("vp_complementation", {"kind": "node", "node": "subj"}),
+        ]
+        ta = record["canonical_analysis"]["typed_analysis"]
+        ta["status"] = "established"
+        ta["relations"] = [
+            {
+                "id": "r_valid", "type": "selection", "arity": "binary",
+                "source": "constituent:obj", "target": "constituent:obj",
+                "status": "established",
+            },
+            {
+                "id": "r_malformed", "type": "selection", "arity": "binary",
+                "source": "constituent:subj", "target": "constituent:ghost",
+                "status": "established",
+            },
+        ]
+        record_payload = authoritative_payload(record, "vp_complementation")
+        self.assertIs(record_payload.state, AuthoritativePayloadState.PRESENT)
+        self.assertGreater(record_payload.resolved_count, 0)
+        self.assertGreater(record_payload.missing_count, 0)
+        self.assertFalse(record_payload.fully_resolved)
+        decision = resolve_scoring_eligibility(record, "vp_complementation")
+        self.assertFalse(decision.scoreable)
+
 
 if __name__ == "__main__":
     unittest.main()
