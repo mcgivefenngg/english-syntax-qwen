@@ -296,11 +296,10 @@ class CoverageResolutionTests(unittest.TestCase):
             "np_internal_constituency" in error and "unannotated/omitted" in error
             for error in validate_record(record, "subject-object")
         ))
-        with self.assertRaises(CoverageResolutionError):
-            resolve_coverage(record, DIMENSION, "subj")
+        self.assertIs(resolve_coverage(record, DIMENSION, "subj"), CoverageState.COMPLETE)
         decision = resolve_scoring_eligibility(record, DIMENSION, "subj")
-        self.assertFalse(decision.scoreable)
-        self.assertIsNone(decision.coverage_state)
+        self.assertTrue(decision.scoreable)
+        self.assertIs(decision.coverage_state, CoverageState.COMPLETE)
 
     def test_record_partial_and_node_complete_works(self) -> None:
         record = with_dimensions(

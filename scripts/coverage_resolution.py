@@ -233,6 +233,25 @@ def _regions_overlap(left: dict[str, Any], right: dict[str, Any]) -> bool:
     return max(left["start"], right["start"]) < min(left["end"], right["end"])
 
 
+def _scope_applies_to_target(
+    scope: dict[str, Any],
+    target: str,
+    target_span: tuple[int, int],
+) -> bool:
+    kind = scope.get("kind")
+    if kind == "record":
+        return True
+    if kind == "node":
+        return scope.get("node") == target
+    return (
+        kind == "region"
+        and type(scope.get("start")) is int
+        and type(scope.get("end")) is int
+        and scope["start"] <= target_span[0]
+        and target_span[1] <= scope["end"]
+    )
+
+
 def _collection_content_issues(
     record: dict[str, Any],
     valid_entries: list[tuple[int, dict[str, Any]]],
@@ -335,8 +354,14 @@ def coverage_declaration_issues(
     dimension: str | None = None,
     *,
     include_content: bool = True,
+    content_target: str | None = None,
 ) -> list[CoverageIssue]:
-    """Return shared H2 declaration/content issues for validation and resolution."""
+    """Validate declarations globally; optionally restrict content to a node.
+
+    Content checks retain every containing scope, including broad record claims,
+    even when a narrower declaration takes precedence for the resolved state.
+    The default retains whole-record content validation.
+    """
     annotation_scope = record.get("annotation_scope")
     dimensions = annotation_scope.get("dimensions", []) if isinstance(annotation_scope, dict) else []
     if not isinstance(dimensions, list):
@@ -395,6 +420,14 @@ def coverage_declaration_issues(
                         f"overlapping peer regions have contradictory coverage states (peer declaration at index {left_index})",
                     ))
     if include_content:
+        if content_target is not None:
+            target_span = _target_span(record, content_target)
+            if target_span is None:
+                raise CoverageResolutionError("coverage target span cannot be resolved")
+            valid_entries = [
+                (index, entry) for index, entry in valid_entries
+                if _scope_applies_to_target(entry["scope"], content_target, target_span)
+            ]
         issues.extend(_collection_content_issues(record, valid_entries))
     return issues
 
@@ -446,6 +479,10 @@ def declared_coverage_state(
         target_span = _target_span(record, target)
         if target_span is None:
             raise CoverageResolutionError("coverage target span cannot be resolved")
+        entries = [
+            entry for entry in entries
+            if _scope_applies_to_target(entry["scope"], target, target_span)
+        ]
         node_entries = [
             entry for entry in entries
             if entry["scope"].get("kind") == "node" and entry["scope"].get("node") == target
@@ -453,14 +490,9 @@ def declared_coverage_state(
         if node_entries:
             return _collapse_states(node_entries, partial_is_covered=True)
 
-        target_start, target_end = target_span
         regions = [
             entry for entry in entries
             if entry["scope"].get("kind") == "region"
-            and type(entry["scope"].get("start")) is int
-            and type(entry["scope"].get("end")) is int
-            and entry["scope"]["start"] <= target_start
-            and target_end <= entry["scope"]["end"]
         ]
         most_specific = [
             entry for entry in regions
@@ -538,11 +570,12 @@ def resolve_coverage(
     if issues:
         issue = issues[0]
         raise CoverageResolutionError(f"{issue.message} (declaration index {issue.index})")
-    issues = coverage_declaration_issues(record, dimension)
+    state = declared_coverage_state(record, dimension, target)
+    normalized_target = validate_coverage_target(record, dimension, target).normalized_target
+    issues = coverage_declaration_issues(record, dimension, content_target=normalized_target)
     if issues:
         issue = issues[0]
         raise CoverageResolutionError(f"{issue.message} (declaration index {issue.index})")
-    state = declared_coverage_state(record, dimension, target)
     if state is CoverageState.PARTIAL_UNCOVERED:
         derived = _derive_partial_present_coverage(record, dimension, target)
         if derived is not None:
