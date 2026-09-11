@@ -15,6 +15,11 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from analysis_envelope_contract import alternative_envelope_issues
+except ImportError:
+    from scripts.analysis_envelope_contract import alternative_envelope_issues
+
+try:
     from canonical_schema import canonical_schema_issues, canonical_schema_required_fields
 except ImportError:
     from scripts.canonical_schema import canonical_schema_issues, canonical_schema_required_fields
@@ -647,10 +652,8 @@ def _validate_analysis(item: Any, location: str, errors: list[str], alternative:
     elif (not _known(typed.get("framework"), FRAMEWORKS) or not typed.get("kind") or typed.get("status") not in {"descriptive", "established", "unresolved", "review_required"}):
         _error(errors, location, "typed_analysis requires kind, known framework, and a valid status")
     elif alternative:
-        if typed.get("framework") != item.get("framework"):
-            _error(errors, location, "alternative framework must agree with typed_analysis.framework")
-        if typed.get("status") != item.get("status"):
-            _error(errors, location, "alternative status must agree with typed_analysis.status")
+        for issue in alternative_envelope_issues(item):
+            _error(errors, location, issue)
 
 
 def _validate_predicand(value: Any, location: str, ids: set[str], objects: dict[str, dict[str, Any]], version: str, errors: list[str]) -> None:

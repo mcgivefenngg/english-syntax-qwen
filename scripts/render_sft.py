@@ -10,6 +10,11 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from analysis_envelope_contract import alternative_envelope_status
+except ImportError:
+    from scripts.analysis_envelope_contract import alternative_envelope_status
+
+try:
     from coverage_resolution import CoverageResolutionError, CoverageState, collection_item_coverage_state, resolve_coverage, declared_coverage_state
 except ImportError:
     from scripts.coverage_resolution import CoverageResolutionError, CoverageState, collection_item_coverage_state, resolve_coverage, declared_coverage_state
@@ -223,7 +228,9 @@ def _content_flags(record: dict[str, Any]) -> list[str]:
                 analyses.append((f"{field}[{index}]", analysis))
     for path, analysis in analyses:
         typed = analysis.get("typed_analysis")
-        if isinstance(typed, dict) and typed.get("status") in {"unresolved", "review_required"}:
+        if path.startswith("alternative_analyses[") and analysis.get("status") in {"unresolved", "review_required"}:
+            flags.append(path)
+        elif isinstance(typed, dict) and typed.get("status") in {"unresolved", "review_required"}:
             flags.append(f"{path}.typed_analysis")
     if record.get("migration_review_required") is True:
         flags.append("migration_review_required")
@@ -495,15 +502,22 @@ def _resolved_positive_identifiers(record: dict[str, Any], dimension: str) -> fr
 
 
 def _partial_record_scalar_covered(record: dict[str, Any], field: str, dimensions: tuple[str, ...]) -> bool:
-    """A record scalar may project under partial-present only when it is itself
-    authoritative positive payload of a dimension whose partial target source
-    is the record annotation itself."""
+    """Retain independently resolved record payload under partial coverage,
+    or complete construction coverage containing a nonpositive sibling."""
     for dimension in dimensions:
         spec = dimension_spec(dimension)
         if spec is None or spec.partial_present_target_source != "record" or field not in spec.fields:
             continue
-        if _coverage_state(record, dimension) is not CoverageState.PARTIAL_COVERED:
-            continue
+        state = _coverage_state(record, dimension)
+        if state is not CoverageState.PARTIAL_COVERED:
+            # A bad alternative must not suppress independently resolved scalars.
+            if dimension != "construction_relations":
+                continue
+            try:
+                if declared_coverage_state(record, dimension) is not CoverageState.COMPLETE:
+                    continue
+            except CoverageResolutionError:
+                continue
         resolved = _resolved_positive_identifiers(record, dimension)
         if field in resolved or any(identifier.startswith(f"{field}[") for identifier in resolved):
             return True
@@ -1038,12 +1052,16 @@ def _project_alternatives(
         return None
     result: list[dict[str, Any]] = []
     for value in values:
-        if not isinstance(value, dict):
+        if not isinstance(value, dict) or alternative_envelope_status(value) != "resolved":
             continue
         links = []
         for field in ("linked_wrapper_ids", "linked_constituent_ids", "linked_clause_refs", "linked_relation_ids"):
             links.extend(value.get(field, []) if isinstance(value.get(field), list) else [])
-        covered = _record_complete(record, ("construction_relations",)) or any(isinstance(link, str) and _any_covered(record, ("construction_relations",), link) for link in links)
+        try:
+            record_declared_complete = declared_coverage_state(record, "construction_relations") is CoverageState.COMPLETE
+        except CoverageResolutionError:
+            record_declared_complete = False
+        covered = record_declared_complete or any(isinstance(link, str) and _any_covered(record, ("construction_relations",), link) for link in links)
         if not covered:
             continue
         item = _without_governance(value, "alternative_analysis", rendering_mode=rendering_mode)

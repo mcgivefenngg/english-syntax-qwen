@@ -12,6 +12,11 @@ from enum import Enum
 from typing import Any
 
 try:
+    from analysis_envelope_contract import alternative_envelope_status, combine_authority_status
+except ImportError:
+    from scripts.analysis_envelope_contract import alternative_envelope_status, combine_authority_status
+
+try:
     from collection_contract import normalize_predicate_reference, validate_coverage_target
 except ImportError:
     from scripts.collection_contract import normalize_predicate_reference, validate_coverage_target
@@ -688,17 +693,17 @@ def _clause_status(record: dict[str, Any], item: dict[str, Any]) -> str:
     return "resolved"
 
 
-def _typed_analyses(record: dict[str, Any]) -> list[tuple[dict[str, Any], dict[str, Any], bool]]:
-    analyses: list[tuple[dict[str, Any], dict[str, Any], bool]] = []
+def _typed_analyses(record: dict[str, Any]) -> list[tuple[dict[str, Any], dict[str, Any], bool, str]]:
+    analyses: list[tuple[dict[str, Any], dict[str, Any], bool, str]] = []
     for field_name in ("canonical_analysis", "preferred_analysis"):
         analysis = record.get(field_name)
         if isinstance(analysis, dict) and isinstance(analysis.get("typed_analysis"), dict):
-            analyses.append((analysis["typed_analysis"], analysis, True))
+            analyses.append((analysis["typed_analysis"], analysis, True, "resolved"))
     alternatives = record.get("alternative_analyses")
     if isinstance(alternatives, list):
         for analysis in alternatives:
             if isinstance(analysis, dict) and isinstance(analysis.get("typed_analysis"), dict):
-                analyses.append((analysis["typed_analysis"], analysis, False))
+                analyses.append((analysis["typed_analysis"], analysis, False, alternative_envelope_status(analysis)))
     return analyses
 
 
@@ -837,7 +842,7 @@ def _typed_relation_items(
 
     # Compute relation ID occurrences across all analyses for duplicate detection
     relation_id_occurrences: dict[str, int] = {}
-    for typed, _analysis, _preferred in _typed_analyses(record):
+    for typed, _analysis, _preferred, _envelope in _typed_analyses(record):
         relations = typed.get("relations")
         if not isinstance(relations, list):
             continue
@@ -849,7 +854,7 @@ def _typed_relation_items(
 
     dep_pairs = _canonical_dependency_pairs(record)
 
-    for typed, _analysis, preferred_authority in _typed_analyses(record):
+    for typed, _analysis, preferred_authority, envelope in _typed_analyses(record):
         relations = typed.get("relations")
         if not isinstance(relations, list):
             continue
@@ -869,6 +874,7 @@ def _typed_relation_items(
                 relation,
                 context=ctx,
             )
+            status = combine_authority_status(status, envelope)
             if not _typed_relation_owned_in_scope(
                 record,
                 spec.name,
@@ -1218,7 +1224,7 @@ def typed_argument_owner_dimensions(argument: Any) -> frozenset[str]:
 def typed_analysis_relation_entries(record: dict[str, Any]) -> list[tuple[tuple[str | int, ...], dict[str, Any]]]:
     """Return every typed relation paired with its analysis-local container path."""
     entries: list[tuple[tuple[str | int, ...], dict[str, Any]]] = []
-    for analysis_path, typed, _preferred in _typed_analysis_paths(record):
+    for analysis_path, typed, _preferred, _envelope in _typed_analysis_paths(record):
         relations = typed.get("relations")
         if not isinstance(relations, list):
             continue
@@ -1332,7 +1338,7 @@ def _construction_typed_payload_items(
 
     # Compute relation ID occurrences across all analyses for duplicate detection
     relation_id_occurrences: dict[str, int] = {}
-    for _analysis_path, typed, _preferred in _typed_analysis_paths(record):
+    for _analysis_path, typed, _preferred, _envelope in _typed_analysis_paths(record):
         relations = typed.get("relations")
         if not isinstance(relations, list):
             continue
@@ -1344,7 +1350,7 @@ def _construction_typed_payload_items(
 
     dep_pairs = _canonical_dependency_pairs(record)
 
-    for analysis_path, typed, preferred_authority in _typed_analysis_paths(record):
+    for analysis_path, typed, preferred_authority, envelope in _typed_analysis_paths(record):
         ctx = TypedRelationValidationContext(
             preferred_authority=preferred_authority,
             relation_id_occurrences=relation_id_occurrences,
@@ -1362,12 +1368,12 @@ def _construction_typed_payload_items(
                         field="typed_relation",
                         identifier=identifier,
                         value=relation,
-                        status=_typed_relation_status(
+                        status=combine_authority_status(_typed_relation_status(
                             record,
                             typed,
                             relation,
                             context=ctx,
-                        ),
+                        ), envelope),
                         path=analysis_path + ("relations", index),
                     ))
             elif relations not in (None, {}, []):
@@ -1384,7 +1390,7 @@ def _construction_typed_payload_items(
                     field="typed_arguments",
                     identifier=identifier,
                     value=value,
-                    status=_typed_nested_status(typed, value),
+                    status=combine_authority_status(_typed_nested_status(typed, value), envelope),
                     path=path,
                 ))
         if _has_field(spec, "typed_entity"):
@@ -1399,7 +1405,9 @@ def _construction_typed_payload_items(
                             entity_id_occurrences[entity_id] = entity_id_occurrences.get(entity_id, 0) + 1
 
             for identifier, value, path in _typed_entity_entries(typed, analysis_path):
-                status = _typed_entity_status_with_duplicates(typed, value, entity_id_occurrences)
+                status = combine_authority_status(
+                    _typed_entity_status_with_duplicates(typed, value, entity_id_occurrences), envelope,
+                )
                 items.append(AuthoritativePayloadItem(
                     field="typed_entity",
                     identifier=identifier,
@@ -1410,17 +1418,17 @@ def _construction_typed_payload_items(
     return items
 
 
-def _typed_analysis_paths(record: dict[str, Any]) -> list[tuple[tuple[str | int, ...], dict[str, Any], bool]]:
-    paths: list[tuple[tuple[str | int, ...], dict[str, Any], bool]] = []
+def _typed_analysis_paths(record: dict[str, Any]) -> list[tuple[tuple[str | int, ...], dict[str, Any], bool, str]]:
+    paths: list[tuple[tuple[str | int, ...], dict[str, Any], bool, str]] = []
     for field_name in ("canonical_analysis", "preferred_analysis"):
         analysis = record.get(field_name)
         if isinstance(analysis, dict) and isinstance(analysis.get("typed_analysis"), dict):
-            paths.append(((field_name, "typed_analysis"), analysis["typed_analysis"], True))
+            paths.append(((field_name, "typed_analysis"), analysis["typed_analysis"], True, "resolved"))
     alternatives = record.get("alternative_analyses")
     if isinstance(alternatives, list):
         for index, analysis in enumerate(alternatives):
             if isinstance(analysis, dict) and isinstance(analysis.get("typed_analysis"), dict):
-                paths.append((("alternative_analyses", index, "typed_analysis"), analysis["typed_analysis"], False))
+                paths.append((("alternative_analyses", index, "typed_analysis"), analysis["typed_analysis"], False, alternative_envelope_status(analysis)))
     return paths
 
 
