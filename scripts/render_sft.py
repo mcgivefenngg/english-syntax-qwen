@@ -29,9 +29,9 @@ try:
 except ImportError:
     from scripts.collection_contract import normalize_collection_item
 try:
-    from construction_payload_contract import construction_signature_status, fusion_relation_status
+    from construction_payload_contract import construction_signature_status, fusion_relation_status, head_relation_status, construction_reference_item_status
 except ImportError:
-    from scripts.construction_payload_contract import construction_signature_status, fusion_relation_status
+    from scripts.construction_payload_contract import construction_signature_status, fusion_relation_status, head_relation_status, construction_reference_item_status
 
 try:
     from data_common import read_jsonl
@@ -151,7 +151,7 @@ _CONTENT_COVERED_STATES = frozenset({CoverageState.COMPLETE, CoverageState.PARTI
 _REFERENCE_KEYS = frozenset({
     "head", "dependent", "parent", "clause_ref", "integration_parent", "subject", "constituent",
     "attachment", "source", "target", "clause", "fused_element", "whole_constituent", "relative_clause",
-    "selected_complements", "predicate", "marker_ids", "linked_wrapper_ids", "linked_constituent_ids",
+    "selected_complements", "complements", "adjuncts", "predicate", "marker_ids", "linked_wrapper_ids", "linked_constituent_ids",
     "linked_clause_refs", "linked_relation_ids", "constituent_ids", "clause_refs", "wrapper_ids",
 })
 
@@ -529,6 +529,8 @@ def _partial_record_scalar_covered(record: dict[str, Any], field: str, dimension
 
 
 def _is_valid_collection_item(record: dict[str, Any], field: str, item: Any) -> bool:
+    if field == "heads":
+        return head_relation_status(record, item) == "resolved"
     objects = _record_objects(record)
     if field == "dependencies":
         return _dependency_status(record, objects, item) == "resolved"
@@ -593,6 +595,10 @@ def _project_semantic_roles(record: dict[str, Any], rendering_mode: str) -> list
 
 
 def _project_heads(record: dict[str, Any], rendering_mode: str) -> list[dict[str, Any]] | None:
+    if _partial_record_scalar_covered(record, "heads", ("construction_relations",)):
+        values = record.get("heads")
+        if isinstance(values, list):
+            return [_without_governance(item, "head_relation", rendering_mode=rendering_mode) for item in values if head_relation_status(record, item) == "resolved"] or None
     return _project_relation_collection(record, "heads", "construction_relations", lambda item: [item.get("head"), item.get("dependent")], rendering_mode)
 
 
@@ -620,12 +626,14 @@ def _project_id_list(record: dict[str, Any], field: str, rendering_mode: str) ->
     values = record.get(field)
     if not isinstance(values, list):
         return None
-    dimensions = projection_property_dimensions(field, "value")
+    dimensions = ("construction_relations",) + projection_property_dimensions(field, "value")
     if not dimensions:
         return None
     if any(_coverage_state(record, dimension) == CoverageState.CONFIRMED_EMPTY for dimension in dimensions):
         return []
-    filtered = [value for value in values if isinstance(value, str) and any(_covered(record, dimension, value) for dimension in dimensions)]
+    resolved = _resolved_positive_identifiers(record, "construction_relations")
+    construction_covered = _partial_record_scalar_covered(record, field, ("construction_relations",)) or _record_complete(record, ("construction_relations",))
+    filtered = [value for index, value in enumerate(values) if construction_reference_item_status(record, field, value) == "resolved" and ((construction_covered and f"{field}[{index}]" in resolved) or any(_covered(record, dimension, value) for dimension in dimensions))]
     return filtered or None
 
 

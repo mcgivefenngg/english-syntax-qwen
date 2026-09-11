@@ -69,9 +69,9 @@ try:
 except ImportError:
     from scripts.collection_contract import normalize_predicate_reference, predicate_reference_issue
 try:
-    from construction_payload_contract import construction_signature_issues, fusion_relation_issues
+    from construction_payload_contract import construction_signature_issues, fusion_relation_issues, head_relation_issues, construction_reference_item_issues
 except ImportError:
-    from scripts.construction_payload_contract import construction_signature_issues, fusion_relation_issues
+    from scripts.construction_payload_contract import construction_signature_issues, fusion_relation_issues, head_relation_issues, construction_reference_item_issues
 
 try:
     from canonical_record_contract import canonical_record_consistency_issues
@@ -1149,19 +1149,15 @@ def validate_record(record: Any, location: str, schema_path: Path | None = None)
                     _error(errors, f"{location}.dependencies[{index}].{field}", "dependency source/target must reference a known ID")
     for field_name in ("complements", "adjuncts"):
         values = record.get(field_name)
-        if values is not None and (not isinstance(values, list) or any(not isinstance(value, str) or value not in ids for value in values)):
+        if values is not None and (not isinstance(values, list) or any(construction_reference_item_issues(record, field_name, value) for value in values)):
             _error(errors, location, f"{field_name} must be a list of constituent/clause IDs")
     heads = record.get("heads")
-    if heads is not None and (not isinstance(heads, list) or any(not isinstance(item, dict) or not isinstance(item.get("head"), str) or item.get("head") not in all_ids or not isinstance(item.get("dependent"), str) or item.get("dependent") not in all_ids for item in heads)):
+    if heads is not None and not isinstance(heads, list):
         _error(errors, location, "heads must contain references to known IDs")
     if isinstance(heads, list):
         for index, item in enumerate(heads):
-            if not isinstance(item, dict):
-                continue
-            if isinstance(item.get("head"), str) and item.get("head") in all_ids:
-                _require_ref_kind(item.get("head"), objects, {"word", "phrase", "clause"}, f"{location}.heads[{index}].head", errors, "head relation head")
-            if isinstance(item.get("dependent"), str) and item.get("dependent") in all_ids:
-                _require_ref_kind(item.get("dependent"), objects, {"word", "phrase", "clause"}, f"{location}.heads[{index}].dependent", errors, "head relation dependent")
+            for issue in head_relation_issues(record, item):
+                _error(errors, f"{location}.heads[{index}]", f"heads must contain references to known IDs: {issue}")
 
     lexical_valency = record.get("lexical_valency", [])
     if lexical_valency is not None and not isinstance(lexical_valency, list):

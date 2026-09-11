@@ -18,6 +18,50 @@ def _record_ids(record: dict[str, Any]) -> set[str]:
     return ids
 
 
+def _objects(record: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    result: dict[str, dict[str, Any]] = {}
+    for field in ("words", "constituents", "clauses"):
+        values = record.get(field)
+        if isinstance(values, list):
+            result.update((item["id"], item) for item in values if isinstance(item, dict) and isinstance(item.get("id"), str))
+    return result
+
+
+def head_relation_issues(record: dict[str, Any], value: Any) -> tuple[str, ...]:
+    if not isinstance(value, dict):
+        return ("head relation must be an object",)
+    objects = _objects(record)
+    issues = []
+    for field in ("head", "dependent"):
+        reference = value.get(field)
+        if not isinstance(reference, str) or reference not in objects:
+            issues.append(f"{field} must reference a known ID")
+        elif objects[reference].get("node_kind") not in {"word", "phrase", "clause"}:
+            issues.append(f"{field} must reference word, phrase, or clause")
+    return tuple(issues)
+
+
+def head_relation_status(record: dict[str, Any], value: Any) -> str:
+    return "resolved" if not head_relation_issues(record, value) else "missing"
+
+
+def construction_reference_item_issues(record: dict[str, Any], field: str, value: Any) -> tuple[str, ...]:
+    if field not in {"complements", "adjuncts"}:
+        return ("unsupported construction reference field",)
+    ids = set()
+    for collection in ("constituents", "clauses"):
+        items = record.get(collection)
+        if isinstance(items, list):
+            ids.update(item["id"] for item in items if isinstance(item, dict) and isinstance(item.get("id"), str))
+    if not isinstance(value, str) or value not in ids:
+        return (f"{field} must reference a known constituent/clause ID",)
+    return ()
+
+
+def construction_reference_item_status(record: dict[str, Any], field: str, value: Any) -> str:
+    return "resolved" if not construction_reference_item_issues(record, field, value) else "missing"
+
+
 def construction_signature_issues(record: dict[str, Any], value: Any) -> tuple[str, ...]:
     if not isinstance(value, dict) or not all(isinstance(value.get(f), str) and value[f] for f in ("predicate_lemma", "construction_type")) or not all(isinstance(value.get(f), list) and value[f] and all(isinstance(x, str) and x for x in value[f]) for f in ("argument_pattern", "function_pattern")):
         return ("required",)

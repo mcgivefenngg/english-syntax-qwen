@@ -1087,7 +1087,6 @@ def _collect_construction(record: dict[str, Any], spec: DimensionSpec, accumulat
     for field_name, status in field_values:
         if _has_field(spec, field_name) and field_name in record:
             accumulator.add(field_name, field_name, status)
-    objects = _record_objects(record)
     for field_name in ("heads", "complements", "adjuncts", "fusion_relations"):
         if not _has_field(spec, field_name):
             continue
@@ -1095,19 +1094,12 @@ def _collect_construction(record: dict[str, Any], spec: DimensionSpec, accumulat
         if not isinstance(values, list):
             continue
         for index, value in enumerate(values):
-            status = "missing"
-            if field_name == "heads":
-                status = "resolved" if isinstance(value, dict) and isinstance(value.get("head"), str) and value["head"] in objects and isinstance(value.get("dependent"), str) and value["dependent"] in objects else "missing"
-            elif field_name in {"complements", "adjuncts"}:
-                status = "resolved" if isinstance(value, str) and value in objects else "missing"
-            else:
-                status = _construction_payload_item_status(record, field_name, value)
+            status = _construction_payload_item_status(record, field_name, value)
             accumulator.add(f"{field_name}[{index}]", field_name, status)
     _typed_relation_items(record, spec, {"kind": "record"}, accumulator)
 
 
 def _construction_payload_item_status(record: dict[str, Any], field_name: str, value: Any) -> str:
-    objects = _record_objects(record)
     if field_name == "construction_signature":
         return _construction_signature_status(record, value)
     if field_name == "construction_type":
@@ -1115,15 +1107,17 @@ def _construction_payload_item_status(record: dict[str, Any], field_name: str, v
     if field_name == "construction_tags":
         return "resolved" if isinstance(value, list) and any(isinstance(item, str) and item for item in value) else "missing"
     if field_name == "heads":
-        return "resolved" if (
-            isinstance(value, dict)
-            and isinstance(value.get("head"), str)
-            and value["head"] in objects
-            and isinstance(value.get("dependent"), str)
-            and value["dependent"] in objects
-        ) else "missing"
+        try:
+            from construction_payload_contract import head_relation_status
+        except ImportError:
+            from scripts.construction_payload_contract import head_relation_status
+        return head_relation_status(record, value)
     if field_name in {"complements", "adjuncts"}:
-        return "resolved" if isinstance(value, str) and value in objects else "missing"
+        try:
+            from construction_payload_contract import construction_reference_item_status
+        except ImportError:
+            from scripts.construction_payload_contract import construction_reference_item_status
+        return construction_reference_item_status(record, field_name, value)
     if field_name == "fusion_relations":
         try:
             from construction_payload_contract import fusion_relation_status
