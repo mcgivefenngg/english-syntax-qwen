@@ -29,9 +29,9 @@ try:
 except ImportError:
     from scripts.collection_contract import normalize_collection_item
 try:
-    from construction_payload_contract import construction_signature_status
+    from construction_payload_contract import construction_signature_status, fusion_relation_status
 except ImportError:
-    from scripts.construction_payload_contract import construction_signature_status
+    from scripts.construction_payload_contract import construction_signature_status, fusion_relation_status
 
 try:
     from data_common import read_jsonl
@@ -1206,6 +1206,12 @@ def linguistic_projection(record: dict[str, Any], *, include_governance: bool = 
                 continue
         elif not (_record_complete(record, dimensions) or _partial_record_scalar_covered(record, field, dimensions)):
             continue
+        if field == "fusion_relations":
+            if not isinstance(value, list):
+                continue
+            value = [item for item in value if fusion_relation_status(record, item) == "resolved"]
+            if not value:
+                continue
         context = {
             "framework": "framework", "sentence_type_metadata": "sentence_type_metadata", "sentence_classification": "sentence_classification",
             "construction_signature": "construction_signature", "fusion_relations": "fusion_relations", "ambiguity": "ambiguity",

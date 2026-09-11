@@ -1101,21 +1101,7 @@ def _collect_construction(record: dict[str, Any], spec: DimensionSpec, accumulat
             elif field_name in {"complements", "adjuncts"}:
                 status = "resolved" if isinstance(value, str) and value in objects else "missing"
             else:
-                required = ("id", "type", "fused_element", "whole_constituent", "relative_clause", "fused_functions")
-                status = "resolved" if (
-                    isinstance(value, dict)
-                    and isinstance(value.get("id"), str)
-                    and isinstance(value.get("type"), str)
-                    and isinstance(value.get("fused_element"), str)
-                    and value["fused_element"] in objects
-                    and isinstance(value.get("whole_constituent"), str)
-                    and value["whole_constituent"] in objects
-                    and isinstance(value.get("relative_clause"), str)
-                    and value["relative_clause"] in objects
-                    and isinstance(value.get("fused_functions"), list)
-                    and len(value["fused_functions"]) >= 2
-                    and all(isinstance(function, str) and function for function in value["fused_functions"])
-                ) else "missing"
+                status = _construction_payload_item_status(record, field_name, value)
             accumulator.add(f"{field_name}[{index}]", field_name, status)
     _typed_relation_items(record, spec, {"kind": "record"}, accumulator)
 
@@ -1139,21 +1125,11 @@ def _construction_payload_item_status(record: dict[str, Any], field_name: str, v
     if field_name in {"complements", "adjuncts"}:
         return "resolved" if isinstance(value, str) and value in objects else "missing"
     if field_name == "fusion_relations":
-        required = ("id", "type", "fused_element", "whole_constituent", "relative_clause", "fused_functions")
-        return "resolved" if (
-            isinstance(value, dict)
-            and isinstance(value.get("id"), str)
-            and isinstance(value.get("type"), str)
-            and isinstance(value.get("fused_element"), str)
-            and value["fused_element"] in objects
-            and isinstance(value.get("whole_constituent"), str)
-            and value["whole_constituent"] in objects
-            and isinstance(value.get("relative_clause"), str)
-            and value["relative_clause"] in objects
-            and isinstance(value.get("fused_functions"), list)
-            and len(value["fused_functions"]) >= 2
-            and all(isinstance(function, str) and function for function in value["fused_functions"])
-        ) else "missing"
+        try:
+            from construction_payload_contract import fusion_relation_status
+        except ImportError:
+            from scripts.construction_payload_contract import fusion_relation_status
+        return fusion_relation_status(record, value)
     return "missing"
 
 

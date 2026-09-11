@@ -69,9 +69,9 @@ try:
 except ImportError:
     from scripts.collection_contract import normalize_predicate_reference, predicate_reference_issue
 try:
-    from construction_payload_contract import construction_signature_issues
+    from construction_payload_contract import construction_signature_issues, fusion_relation_issues
 except ImportError:
-    from scripts.construction_payload_contract import construction_signature_issues
+    from scripts.construction_payload_contract import construction_signature_issues, fusion_relation_issues
 
 try:
     from canonical_record_contract import canonical_record_consistency_issues
@@ -1301,37 +1301,10 @@ def validate_record(record: Any, location: str, schema_path: Path | None = None)
         if not isinstance(fusion_items, list):
             _error(errors, location, "fusion_relations must be an array")
         else:
-            fusion_ids: set[str] = set()
-            clause_ids = {
-                clause.get("id") for clause in clause_items
-                if isinstance(clause, dict) and isinstance(clause.get("id"), str)
-            }
             for index, fusion in enumerate(fusion_items):
                 fusion_location = f"{location}.fusion_relations[{index}]"
-                if not isinstance(fusion, dict):
-                    _error(errors, fusion_location, "fusion relation must be an object")
-                    continue
-                if isinstance(fusion.get("id"), str) and fusion.get("id") in fusion_ids:
-                    _error(errors, fusion_location, "duplicate fusion relation id")
-                if isinstance(fusion.get("id"), str):
-                    fusion_ids.add(fusion.get("id"))
-                for field in ("fused_element", "whole_constituent"):
-                    if not isinstance(fusion.get(field), str) or fusion.get(field) not in all_ids:
-                        _error(errors, fusion_location, f"{field} must reference a known ID")
-                if isinstance(fusion.get("fused_element"), str) and fusion.get("fused_element") in all_ids:
-                    _require_ref_kind(fusion.get("fused_element"), objects, {"word"}, f"{fusion_location}.fused_element", errors, "fusion.fused_element")
-                if isinstance(fusion.get("whole_constituent"), str) and fusion.get("whole_constituent") in all_ids:
-                    _require_ref_kind(fusion.get("whole_constituent"), objects, {"phrase", "clause"}, f"{fusion_location}.whole_constituent", errors, "fusion.whole_constituent")
-                if not isinstance(fusion.get("relative_clause"), str) or fusion.get("relative_clause") not in clause_ids:
-                    _error(errors, fusion_location, "relative_clause must reference a known clause")
-                dependency = fusion.get("dependency")
-                if dependency is not None and (not isinstance(dependency, dict) or not isinstance(dependency.get("head"), str) or dependency.get("head") not in all_ids or not isinstance(dependency.get("dependent"), str) or dependency.get("dependent") not in all_ids or not dependency.get("relation")):
-                    _error(errors, fusion_location, "fusion dependency must reference known IDs")
-                elif isinstance(dependency, dict):
-                    if isinstance(dependency.get("head"), str) and dependency.get("head") in all_ids:
-                        _require_ref_kind(dependency.get("head"), objects, {"word", "phrase", "clause"}, f"{fusion_location}.dependency.head", errors, "fusion dependency head")
-                    if isinstance(dependency.get("dependent"), str) and dependency.get("dependent") in all_ids:
-                        _require_ref_kind(dependency.get("dependent"), objects, {"word", "phrase", "clause"}, f"{fusion_location}.dependency.dependent", errors, "fusion dependency dependent")
+                for issue in fusion_relation_issues(record, fusion):
+                    _error(errors, fusion_location, issue)
 
     ambiguity = record.get("ambiguity")
     if ambiguity is not None:
