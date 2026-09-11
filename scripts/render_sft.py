@@ -113,6 +113,7 @@ LINGUISTIC_NESTED_FIELDS = {
     "alternative_analyses": {"id", "label", "claims", "framework", "construction_type", "analysis_type", "status", "typed_analysis", "learner_explanation", "linked_wrapper_ids", "linked_constituent_ids", "linked_clause_refs", "linked_relation_ids"},
     "alternative_framework": {"framework", "analysis"},
     "clause": {"node_kind", "id", "span", "finiteness", "clause_form", "clause_construction", "integration", "subject", "predicand", "head", "marker_ids", "integration_parent"},
+    "predicand": {"kind", "target", "basis", "note"},
     "constituent": {"node_kind", "id", "span", "phrase_category", "clause_ref", "function", "head", "parent", "relation_label", "realization", "span_relation"},
     "dependency": {"relation", "head", "dependent", "note"},
     "head_relation": {"head", "dependent", "relation"},
@@ -182,7 +183,7 @@ def _without_governance(value: Any, context: str | None = None, *, rendering_mod
                 "arguments": "typed_arguments", "entities": "typed_entity", "relations": "typed_relation",
                 "source": "typed_reference", "target": "typed_reference",
                 "morphology": "morphology", "realization": "realization", "rejected_analyses": "rejected_analyses",
-                "span": "span",
+                "span": "span", "predicand": "predicand",
                 "canonical_analysis": "analysis", "preferred_analysis": "analysis",
                 "alternative_analyses": "alternative_analysis",
                 "alternatives": "alternative_framework", "ambiguity": "ambiguity", "analyses": "ambiguity_analysis",
@@ -445,7 +446,13 @@ def _project_clauses(record: dict[str, Any], rendering_mode: str) -> list[dict[s
         item = {"id": identifier, "node_kind": "clause"}
         for key in ("span", "finiteness", "clause_form", "clause_construction", "integration", "subject", "predicand", "head", "marker_ids", "integration_parent"):
             if key in source:
-                item[key] = _without_governance(source[key], "span" if key == "span" else "clause", rendering_mode=rendering_mode)
+                if key == "span":
+                    context = "span"
+                elif key == "predicand":
+                    context = "predicand"
+                else:
+                    context = "clause"
+                item[key] = _without_governance(source[key], context, rendering_mode=rendering_mode)
         result.append(item)
     return result or None
 
