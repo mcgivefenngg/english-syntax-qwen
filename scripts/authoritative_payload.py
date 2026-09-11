@@ -49,9 +49,9 @@ except ImportError:
     )
 
 try:
-    from dimension_registry import DIMENSION_REGISTRY, DimensionSpec, PayloadSpec, dimension_spec
+    from dimension_registry import DIMENSION_REGISTRY, DimensionSpec, PayloadSpec, dimension_spec, typed_relation_owner_dimensions, typed_argument_owner_dimensions as registry_typed_argument_owner_dimensions
 except ImportError:
-    from scripts.dimension_registry import DIMENSION_REGISTRY, DimensionSpec, PayloadSpec, dimension_spec
+    from scripts.dimension_registry import DIMENSION_REGISTRY, DimensionSpec, PayloadSpec, dimension_spec, typed_relation_owner_dimensions, typed_argument_owner_dimensions as registry_typed_argument_owner_dimensions
 
 try:
     from typed_relation_contract import (
@@ -835,11 +835,6 @@ def _typed_relation_items(
     scope: dict[str, Any],
     accumulator: _PayloadAccumulator,
 ) -> None:
-    relation_specs = [payload for payload in spec.payloads if payload.field == "typed_relation" and payload.relation_types]
-    relation_types = set().union(*(payload.relation_types for payload in relation_specs)) if relation_specs else set()
-    if not relation_types:
-        return
-
     # Compute relation ID occurrences across all analyses for duplicate detection
     relation_id_occurrences: dict[str, int] = {}
     for typed, _analysis, _preferred, _envelope in _typed_analyses(record):
@@ -865,7 +860,7 @@ def _typed_relation_items(
             canonical_dependency_pairs=dep_pairs,
         )
         for index, relation in enumerate(relations):
-            if not isinstance(relation, dict) or relation.get("type") not in relation_types:
+            if not isinstance(relation, dict) or spec.name not in typed_relation_owner_dimensions(relation.get("type")):
                 continue
             identifier = relation.get("id") if isinstance(relation.get("id"), str) else f"typed_relation[{index}]"
             status = _typed_relation_status(
@@ -1172,53 +1167,21 @@ def _construction_payload_item_status(record: dict[str, Any], field_name: str, v
 
 CONSTRUCTION_RELATION_DIMENSION = "construction_relations"
 
-_NESTED_GOVERNANCE_KEYS = frozenset({"status", "notes", "note"})
-
 
 def construction_typed_relation_types() -> frozenset[str]:
-    """Return the typed relation types the registry declares construction-owned."""
-    spec = dimension_spec(CONSTRUCTION_RELATION_DIMENSION)
-    if spec is None:
-        return frozenset()
-    relation_types: set[str] = set()
-    for payload in spec.payloads:
-        if payload.field == "typed_relation":
-            relation_types.update(payload.relation_types)
-    return frozenset(relation_types)
-
-
-def typed_relation_owner_dimensions(relation_type: Any) -> frozenset[str]:
-    """Return registry dimensions other than construction that own one typed relation type."""
-    if not isinstance(relation_type, str) or not relation_type:
-        return frozenset()
+    """Compatibility inverse query for construction migration; ownership lives in the registry."""
     return frozenset(
-        spec.name
+        relation_type
         for spec in DIMENSION_REGISTRY.values()
-        if spec.name != CONSTRUCTION_RELATION_DIMENSION
         for payload in spec.payloads
-        if payload.field == "typed_relation" and relation_type in payload.relation_types
+        for relation_type in payload.relation_types
+        if CONSTRUCTION_RELATION_DIMENSION in typed_relation_owner_dimensions(relation_type)
     )
 
 
 def typed_argument_owner_dimensions(argument: Any) -> frozenset[str]:
-    """Return registry dimensions other than construction whose typed_arguments ownership covers this item.
-
-    Ownership requires that every linguistic property of the nested argument falls
-    inside the dimension's declared ``typed_arguments`` property set; a mere field
-    listing is not treated as participation evidence.
-    """
-    if not isinstance(argument, dict):
-        return frozenset()
-    properties = {key for key in argument if key not in _NESTED_GOVERNANCE_KEYS}
-    if not properties:
-        return frozenset()
-    return frozenset(
-        spec.name
-        for spec in DIMENSION_REGISTRY.values()
-        if spec.name != CONSTRUCTION_RELATION_DIMENSION
-        for payload in spec.payloads
-        if payload.field == "typed_arguments" and properties <= payload.properties
-    )
+    """Compatibility query for migration protection outside construction ownership."""
+    return registry_typed_argument_owner_dimensions(argument) - {CONSTRUCTION_RELATION_DIMENSION}
 
 
 def typed_analysis_relation_entries(record: dict[str, Any]) -> list[tuple[tuple[str | int, ...], dict[str, Any]]]:
@@ -1330,12 +1293,6 @@ def _construction_typed_payload_items(
     spec: DimensionSpec,
 ) -> list[AuthoritativePayloadItem]:
     items: list[AuthoritativePayloadItem] = []
-    relation_specs = [
-        payload for payload in spec.payloads
-        if payload.field == "typed_relation" and payload.relation_types
-    ]
-    relation_types = set().union(*(payload.relation_types for payload in relation_specs)) if relation_specs else set()
-
     # Compute relation ID occurrences across all analyses for duplicate detection
     relation_id_occurrences: dict[str, int] = {}
     for _analysis_path, typed, _preferred, _envelope in _typed_analysis_paths(record):
@@ -1357,11 +1314,11 @@ def _construction_typed_payload_items(
             valid_analysis_entity_ids=valid_analysis_entity_ids(typed),
             canonical_dependency_pairs=dep_pairs,
         )
-        if relation_types and _has_field(spec, "typed_relation"):
+        if _has_field(spec, "typed_relation"):
             relations = typed.get("relations")
             if isinstance(relations, list):
                 for index, relation in enumerate(relations):
-                    if not isinstance(relation, dict) or relation.get("type") not in relation_types:
+                    if not isinstance(relation, dict) or spec.name not in typed_relation_owner_dimensions(relation.get("type")):
                         continue
                     identifier = relation.get("id") if isinstance(relation.get("id"), str) else f"typed_relation[{index}]"
                     items.append(AuthoritativePayloadItem(

@@ -323,7 +323,7 @@ class AuthoritativePayloadContractTests(unittest.TestCase):
         self.assertEqual(typed_argument_owner_dimensions("literal"), frozenset())
         self.assertEqual(typed_relation_owner_dimensions("dependency"), {"dependencies"})
         self.assertEqual(typed_relation_owner_dimensions("selection"), {"vp_complementation"})
-        self.assertEqual(typed_relation_owner_dimensions("construction"), frozenset())
+        self.assertEqual(typed_relation_owner_dimensions("construction"), {"construction_relations"})
         self.assertEqual(typed_relation_owner_dimensions("pedagogical:object"), frozenset())
         self.assertIn("construction", construction_typed_relation_types())
         self.assertNotIn("dependency", construction_typed_relation_types())

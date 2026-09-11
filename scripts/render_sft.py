@@ -35,9 +35,9 @@ except ImportError:
     from scripts.data_common import read_jsonl
 
 try:
-    from dimension_registry import DIMENSION_REGISTRY, PROJECTION_FIELD_DIMENSIONS, dimension_spec, projection_property_dimensions
+    from dimension_registry import DIMENSION_REGISTRY, PROJECTION_FIELD_DIMENSIONS, dimension_spec, projection_property_dimensions, typed_relation_owner_dimensions, typed_argument_owner_dimensions
 except ImportError:
-    from scripts.dimension_registry import DIMENSION_REGISTRY, PROJECTION_FIELD_DIMENSIONS, dimension_spec, projection_property_dimensions
+    from scripts.dimension_registry import DIMENSION_REGISTRY, PROJECTION_FIELD_DIMENSIONS, dimension_spec, projection_property_dimensions, typed_relation_owner_dimensions, typed_argument_owner_dimensions
 
 try:
     from typed_relation_contract import (
@@ -644,17 +644,13 @@ def _typed_relation_targets(relation: dict[str, Any]) -> list[str]:
     return targets
 
 
-def _typed_relation_all_targets(relation: dict[str, Any]) -> list[str]:
+def _typed_relation_entity_targets(relation: dict[str, Any]) -> list[str]:
     targets: list[str] = []
     for key in ("source", "target"):
         reference = _typed_reference(relation.get(key))
-        if reference:
+        if reference and reference[0] == "analysis":
             targets.append(reference[1])
     return targets
-
-
-def _typed_relation_dimension(relation: dict[str, Any]) -> str:
-    return "dependencies" if relation.get("type") == "dependency" else "construction_relations"
 
 
 def _record_relation_id_occurrences(record: dict[str, Any]) -> dict[str, int]:
@@ -721,7 +717,17 @@ def _typed_relation_is_covered(
         if structural_status != "resolved":
             return False
 
-    dimension = _typed_relation_dimension(relation)
+    return bool(_typed_relation_covered_owners(record, relation))
+
+
+def _typed_relation_covered_owners(record: dict[str, Any], relation: dict[str, Any]) -> frozenset[str]:
+    return frozenset(
+        dimension for dimension in typed_relation_owner_dimensions(relation.get("type"))
+        if _typed_owner_is_covered(record, dimension, relation)
+    )
+
+
+def _typed_owner_is_covered(record: dict[str, Any], dimension: str, relation: dict[str, Any]) -> bool:
     try:
         raw_state = declared_coverage_state(record, dimension)
     except CoverageResolutionError:
@@ -802,7 +808,7 @@ def _filter_typed_properties(
     record: dict[str, Any],
     value: Any,
     context: str,
-    relation_dimension: str,
+    owner_dimensions: frozenset[str],
     rendering_mode: str,
 ) -> Any:
     if isinstance(value, dict):
@@ -810,17 +816,23 @@ def _filter_typed_properties(
         for key, item in value.items():
             if key in {"role", "function", "category"} and not _typed_property_is_covered(record, context, key, value):
                 continue
-            if key not in {"role", "function", "category"}:
+            # Retained relations and their local entity shells need structural identity
+            # even when their owner does not separately list these infrastructure keys.
+            infrastructure = (
+                context == "typed_entity" and key in {"id", "kind"}
+                or context == "typed_relation" and key in {"id", "kind", "type", "arity", "namespace", "framework"}
+            )
+            if key not in {"role", "function", "category"} and not infrastructure:
                 dimensions = projection_property_dimensions(context, key)
-                if dimensions and relation_dimension not in dimensions:
+                if dimensions and not owner_dimensions.intersection(dimensions):
                     continue
             child_context = {
                 "source": "typed_reference", "target": "typed_reference",
             }.get(key, context)
-            result[key] = _filter_typed_properties(record, item, child_context, relation_dimension, rendering_mode)
+            result[key] = _filter_typed_properties(record, item, child_context, owner_dimensions, rendering_mode)
         return result
     if isinstance(value, list):
-        return [_filter_typed_properties(record, item, context, relation_dimension, rendering_mode) for item in value]
+        return [_filter_typed_properties(record, item, context, owner_dimensions, rendering_mode) for item in value]
     return copy.deepcopy(value)
 
 
@@ -828,27 +840,37 @@ def _project_typed_object(
     record: dict[str, Any],
     value: Any,
     context: str,
-    relation_dimension: str,
+    owner_dimensions: frozenset[str],
     rendering_mode: str,
 ) -> Any:
     projected = _without_governance(value, context, rendering_mode=rendering_mode)
-    return _filter_typed_properties(record, projected, context, relation_dimension, rendering_mode)
+    return _filter_typed_properties(record, projected, context, owner_dimensions, rendering_mode)
 
 
-def _project_typed_arguments(record: dict[str, Any], value: Any, relation_dimension: str, rendering_mode: str) -> Any:
+def _project_typed_arguments(record: dict[str, Any], value: Any, rendering_mode: str) -> Any:
+    def project(item: Any) -> Any:
+        if not isinstance(item, dict):
+            return None
+        if item.get("status") in {"unresolved", "review_required"}:
+            return None
+        # Special properties have independent, target-sensitive owners.
+        core = {key: value for key, value in item.items() if key not in {"role", "function", "category"}}
+        owners = frozenset(
+            dimension for dimension in typed_argument_owner_dimensions(core or item)
+            if _typed_owner_is_covered(record, dimension, item)
+        )
+        if not owners:
+            return None
+        return _project_typed_object(record, item, "typed_arguments", owners, rendering_mode)
+
     if isinstance(value, list):
-        return [_project_typed_object(record, item, "typed_arguments", relation_dimension, rendering_mode) for item in value]
+        return [projected for item in value if (projected := project(item))]
     if not isinstance(value, dict):
         return None
     argument_fields = set(LINGUISTIC_NESTED_FIELDS["typed_arguments"])
     if any(key in argument_fields for key in value):
-        return _project_typed_object(record, value, "typed_arguments", relation_dimension, rendering_mode)
-    result = {
-        key: _project_typed_object(record, item, "typed_arguments", relation_dimension, rendering_mode)
-        for key, item in value.items()
-        if isinstance(item, dict)
-    }
-    return result or None
+        return project(value)
+    return {key: projected for key, item in value.items() if (projected := project(item))} or None
 
 
 def _project_typed_analysis(
@@ -863,6 +885,7 @@ def _project_typed_analysis(
         return None
     relations = value.get("relations")
     projected_relations: list[dict[str, Any]] = []
+    active_owners: set[str] = set()
     if isinstance(relations, list):
         for relation in relations:
             if isinstance(relation, dict) and _typed_relation_is_covered(
@@ -872,24 +895,23 @@ def _project_typed_analysis(
                 preferred_authority=preferred_authority,
                 relation_id_occurrences=relation_id_occurrences,
             ):
-                dimension = _typed_relation_dimension(relation)
-                projected_relations.append(_project_typed_object(record, relation, "typed_relation", dimension, rendering_mode))
-    construction_covered = _record_complete(record, ("construction_relations",))
-    analysis_dimension = "construction_relations" if construction_covered else "dependencies"
+                owners = _typed_relation_covered_owners(record, relation)
+                active_owners.update(owners)
+                projected_relations.append(_project_typed_object(record, relation, "typed_relation", owners, rendering_mode))
     result: dict[str, Any] = {}
     for key in ("kind", "framework"):
         if key in value:
             result[key] = copy.deepcopy(value[key])
-    if construction_covered or projected_relations:
-        if "arguments" in value and (construction_covered or projected_relations):
-            arguments = _project_typed_arguments(record, value["arguments"], analysis_dimension, rendering_mode)
+    if validate_typed_analysis_container(value) and value.get("status") in {"descriptive", "established"}:
+        if "arguments" in value:
+            arguments = _project_typed_arguments(record, value["arguments"], rendering_mode)
             if arguments:
                 result["arguments"] = arguments
         if isinstance(value.get("entities"), list):
-            referenced = {target for relation in projected_relations for target in _typed_relation_all_targets(relation)}
+            referenced = {target for relation in projected_relations for target in _typed_relation_entity_targets(relation)}
             valid_entity_ids = valid_analysis_entity_ids(value)
             entities = [
-                _project_typed_object(record, entity, "typed_entity", analysis_dimension, rendering_mode)
+                _project_typed_object(record, entity, "typed_entity", frozenset(active_owners), rendering_mode)
                 for entity in value["entities"]
                 if isinstance(entity, dict) and entity.get("id") in referenced and entity.get("id") in valid_entity_ids
             ]
@@ -910,8 +932,14 @@ def _project_analysis(
     *,
     relation_id_occurrences: dict[str, int] | None = None,
 ) -> dict[str, Any] | None:
-    if not isinstance(value, dict) or not covered:
+    if not isinstance(value, dict):
         return None
+    typed = _project_typed_analysis(
+        record, value.get("typed_analysis"), rendering_mode,
+        preferred_authority=True, relation_id_occurrences=relation_id_occurrences,
+    )
+    if not covered:
+        return {"typed_analysis": typed} if typed and (typed.get("relations") or typed.get("arguments")) else None
     result = _without_governance(value, "analysis", rendering_mode=rendering_mode)
     if not allow_prose:
         result.pop("label", None)
@@ -923,13 +951,6 @@ def _project_analysis(
     if "analysis_type" in result and not _record_complete(record, ("construction_relations",)):
         result.pop("analysis_type", None)
     if isinstance(value.get("typed_analysis"), dict):
-        typed = _project_typed_analysis(
-            record,
-            value["typed_analysis"],
-            rendering_mode,
-            preferred_authority=True,
-            relation_id_occurrences=relation_id_occurrences,
-        )
         if typed is None:
             result.pop("typed_analysis", None)
         else:
@@ -1062,17 +1083,14 @@ def _project_alternatives(
         except CoverageResolutionError:
             record_declared_complete = False
         covered = record_declared_complete or any(isinstance(link, str) and _any_covered(record, ("construction_relations",), link) for link in links)
-        if not covered:
+        typed = _project_typed_analysis(
+            record, value.get("typed_analysis"), rendering_mode,
+            preferred_authority=False, relation_id_occurrences=relation_id_occurrences,
+        )
+        if not covered and not (typed and typed.get("relations")):
             continue
         item = _without_governance(value, "alternative_analysis", rendering_mode=rendering_mode)
         if isinstance(value.get("typed_analysis"), dict) and isinstance(item, dict):
-            typed = _project_typed_analysis(
-                record,
-                value["typed_analysis"],
-                rendering_mode,
-                preferred_authority=False,
-                relation_id_occurrences=relation_id_occurrences,
-            )
             if typed is None:
                 item.pop("typed_analysis", None)
             else:
@@ -1191,7 +1209,7 @@ def linguistic_projection(record: dict[str, Any], *, include_governance: bool = 
     for field in ("canonical_analysis", "preferred_analysis"):
         if field in record:
             analysis_covered = bool(projection) and any(key != "sentence" for key in projection)
-            analysis_covered = analysis_covered or _record_complete(record, ("construction_relations", "dependencies"))
+            analysis_covered = analysis_covered or _record_complete(record, projection_property_dimensions("typed_analysis", "kind"))
             allow_prose = _record_complete_all(record, ("clause_structure", "phrase_constituency", "syntactic_function"))
             relation_id_occurrences = _record_relation_id_occurrences(record)
             analysis = _project_analysis(

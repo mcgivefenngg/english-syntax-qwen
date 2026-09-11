@@ -316,3 +316,30 @@ def projection_property_dimensions(field: str, property_name: str) -> tuple[str,
         for dimension, spec in DIMENSION_REGISTRY.items()
         if property_name in spec.property_map.get(field, frozenset())
     )
+
+
+def typed_relation_owner_dimensions(relation_type: object) -> frozenset[str]:
+    """Return all registry owners of a relation type, excluding property-only ownership."""
+    if not isinstance(relation_type, str) or not relation_type:
+        return frozenset()
+    return frozenset(
+        dimension
+        for dimension, spec in DIMENSION_REGISTRY.items()
+        for payload in spec.payloads
+        if payload.field == "typed_relation" and relation_type in payload.relation_types
+    )
+
+
+def typed_argument_owner_dimensions(argument: object) -> frozenset[str]:
+    """Return dimensions owning every linguistic property of an argument."""
+    if not isinstance(argument, dict):
+        return frozenset()
+    properties = set(argument) - {"status", "notes", "note"}
+    if not properties:
+        return frozenset()
+    return frozenset(
+        dimension
+        for dimension, spec in DIMENSION_REGISTRY.items()
+        for payload in spec.payloads
+        if payload.field == "typed_arguments" and properties <= payload.properties
+    )
