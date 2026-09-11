@@ -68,6 +68,10 @@ try:
     from collection_contract import normalize_predicate_reference, predicate_reference_issue
 except ImportError:
     from scripts.collection_contract import normalize_predicate_reference, predicate_reference_issue
+try:
+    from construction_payload_contract import construction_signature_issues
+except ImportError:
+    from scripts.construction_payload_contract import construction_signature_issues
 
 try:
     from canonical_record_contract import canonical_record_consistency_issues
@@ -1399,23 +1403,17 @@ def validate_record(record: Any, location: str, schema_path: Path | None = None)
 
     signature = record.get("construction_signature")
     if signature is not None:
-        if not isinstance(signature, dict) or not all(isinstance(signature.get(field), str) and signature[field] for field in ("predicate_lemma", "construction_type")) or not isinstance(signature.get("argument_pattern"), list) or not isinstance(signature.get("function_pattern"), list) or not signature["argument_pattern"] or not signature["function_pattern"]:
+        issues = construction_signature_issues(record, signature)
+        if issues == ("required",):
             _error(errors, location, "construction_signature requires predicate_lemma, construction_type, argument_pattern, and function_pattern")
-        elif len(signature["argument_pattern"]) != len(signature["function_pattern"]):
+        elif issues == ("length",):
             _error(errors, location, "construction_signature argument_pattern and function_pattern must have equal lengths")
-        elif any(value in all_ids for value in signature["argument_pattern"] + signature["function_pattern"] if isinstance(value, str)):
+        elif issues == ("stable_descriptors",):
             _error(errors, location, "construction_signature patterns must use stable descriptors, not record-local IDs")
-        elif record.get("construction_type") is not None and record.get("construction_type") != signature["construction_type"]:
+        elif issues == ("construction_type",):
             _error(errors, location, "construction_signature construction_type must agree with construction_type")
-        elif isinstance(record.get("lexical_valency"), list) and record["lexical_valency"]:
-            signature_predicate_id = normalize_predicate_reference(record, signature["predicate_lemma"])
-            valency_predicate_ids = {
-                normalize_predicate_reference(record, item.get("predicate"))
-                for item in record["lexical_valency"]
-                if isinstance(item, dict)
-            }
-            if signature_predicate_id is None or signature_predicate_id not in valency_predicate_ids:
-                _error(errors, location, "construction_signature predicate_lemma must agree with lexical_valency")
+        elif issues == ("predicate",):
+            _error(errors, location, "construction_signature predicate_lemma must agree with lexical_valency")
 
     if not isinstance(record["explanation"], str) or not record["explanation"].strip():
         _error(errors, location, "explanation must be non-empty")

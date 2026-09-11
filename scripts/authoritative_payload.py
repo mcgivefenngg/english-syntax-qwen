@@ -1070,25 +1070,17 @@ def _collect_complementation(record: dict[str, Any], spec: DimensionSpec, scope:
     _typed_relation_items(record, spec, scope, accumulator)
 
 
-def _construction_signature_status(value: Any) -> str:
-    if not isinstance(value, dict):
-        return "missing"
-    required = ("predicate_lemma", "construction_type", "argument_pattern", "function_pattern")
-    if not all(isinstance(value.get(field_name), str) and value[field_name] for field_name in required[:2]):
-        return "missing"
-    if not all(
-        isinstance(value.get(field_name), list)
-        and value[field_name]
-        and all(isinstance(item, str) and item for item in value[field_name])
-        for field_name in required[2:]
-    ):
-        return "missing"
-    return "resolved" if len(value["argument_pattern"]) == len(value["function_pattern"]) else "missing"
+def _construction_signature_status(record: dict[str, Any], value: Any) -> str:
+    try:
+        from construction_payload_contract import construction_signature_status
+    except ImportError:
+        from scripts.construction_payload_contract import construction_signature_status
+    return construction_signature_status(record, value)
 
 
 def _collect_construction(record: dict[str, Any], spec: DimensionSpec, accumulator: _PayloadAccumulator) -> None:
     field_values = (
-        ("construction_signature", _construction_signature_status(record.get("construction_signature"))),
+        ("construction_signature", _construction_signature_status(record, record.get("construction_signature"))),
         ("construction_type", "resolved" if isinstance(record.get("construction_type"), str) and record["construction_type"] else "missing"),
         ("construction_tags", "resolved" if isinstance(record.get("construction_tags"), list) and any(isinstance(value, str) and value for value in record["construction_tags"]) else "missing"),
     )
@@ -1131,7 +1123,7 @@ def _collect_construction(record: dict[str, Any], spec: DimensionSpec, accumulat
 def _construction_payload_item_status(record: dict[str, Any], field_name: str, value: Any) -> str:
     objects = _record_objects(record)
     if field_name == "construction_signature":
-        return _construction_signature_status(value)
+        return _construction_signature_status(record, value)
     if field_name == "construction_type":
         return "resolved" if isinstance(value, str) and value else "missing"
     if field_name == "construction_tags":

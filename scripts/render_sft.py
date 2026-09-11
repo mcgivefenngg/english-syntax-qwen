@@ -28,6 +28,10 @@ try:
     from collection_contract import normalize_collection_item
 except ImportError:
     from scripts.collection_contract import normalize_collection_item
+try:
+    from construction_payload_contract import construction_signature_status
+except ImportError:
+    from scripts.construction_payload_contract import construction_signature_status
 
 try:
     from data_common import read_jsonl
@@ -1184,6 +1188,8 @@ def linguistic_projection(record: dict[str, Any], *, include_governance: bool = 
         if field in conflicted_fields:
             continue
         value = record[field]
+        if field == "construction_signature" and construction_signature_status(record, value) != "resolved":
+            continue
         if field in {"pedagogical_aliases", "fusion_relations", "ambiguity", "rejected_analyses", "error_diagnosis"}:
             if not _record_complete(record, dimensions):
                 if not (
